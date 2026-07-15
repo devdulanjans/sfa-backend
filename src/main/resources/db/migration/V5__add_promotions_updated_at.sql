@@ -1,0 +1,2 @@
+ALTER TABLE promotions
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;

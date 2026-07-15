@@ -1,0 +1,1 @@
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS show_promotion_as_discount BOOLEAN NOT NULL DEFAULT FALSE;

@@ -1,0 +1,2 @@
+ALTER TABLE promotions
+    ADD COLUMN IF NOT EXISTS max_free_count INT NOT NULL DEFAULT 1;

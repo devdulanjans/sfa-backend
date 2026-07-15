@@ -1,0 +1,2 @@
+ALTER TABLE batch_prices
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
