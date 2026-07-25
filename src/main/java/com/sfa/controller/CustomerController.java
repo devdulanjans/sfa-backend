@@ -60,10 +60,12 @@ public class CustomerController {
     public Page<CustomerDto> list(
             @AuthenticationPrincipal UserDetailsImpl user,
             @RequestParam(defaultValue = "") String search,
+            @RequestParam(defaultValue = "false") boolean includeDeleted,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
         Set<UUID> restricted = restrictedIds(user);
-        return customerService.list(search, restricted, PageRequest.of(page, size, Sort.by("name")));
+        boolean effectiveIncludeDeleted = includeDeleted && user != null && Role.SUPER_ADMIN.equals(user.getRoleName());
+        return customerService.list(search, restricted, effectiveIncludeDeleted, PageRequest.of(page, size, Sort.by("name")));
     }
 
     @GetMapping("/export")
@@ -73,7 +75,7 @@ public class CustomerController {
             @RequestParam String format,
             @RequestParam(defaultValue = "") String search) throws IOException {
         Set<UUID> restricted = restrictedIds(user);
-        List<CustomerDto> rows = customerService.list(search, restricted, Pageable.unpaged()).getContent();
+        List<CustomerDto> rows = customerService.list(search, restricted, false, Pageable.unpaged()).getContent();
 
         byte[] bytes;
         MediaType contentType;
@@ -133,8 +135,16 @@ public class CustomerController {
     @DeleteMapping("/{id}")
     @PreAuthorize("hasRole('SUPER_ADMIN')")
     @RequiresLicense(LicensedPackage.SFA)
-    public ResponseEntity<Void> deactivate(@PathVariable UUID id) {
-        customerService.deactivate(id);
+    public ResponseEntity<Void> softDelete(@PathVariable UUID id) {
+        customerService.softDelete(id);
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/{id}/restore")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @RequiresLicense(LicensedPackage.SFA)
+    public ResponseEntity<Void> restore(@PathVariable UUID id) {
+        customerService.restore(id);
         return ResponseEntity.noContent().build();
     }
 

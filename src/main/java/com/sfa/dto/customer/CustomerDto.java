@@ -3,6 +3,7 @@ package com.sfa.dto.customer;
 import com.sfa.entity.Customer;
 import org.hibernate.Hibernate;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -14,6 +15,7 @@ public record CustomerDto(
         String phone,
         String email,
         String location,
+        String placeOfSupplier,
         String taxNumber,
         String taxType,
         Double taxRate,
@@ -25,7 +27,8 @@ public record CustomerDto(
         Double currentBalance,
         String source,
         List<UUID> assignedProductIds,
-        List<CustomerAddressDto> addresses
+        List<CustomerAddressDto> addresses,
+        Instant deletedAt
 ) {
     public static CustomerDto from(Customer c) {
         List<UUID> productIds = Hibernate.isInitialized(c.getAssignedProducts())
@@ -53,6 +56,7 @@ public record CustomerDto(
                 c.getPhone(),
                 c.getEmail(),
                 c.getLocation(),
+                c.getPlaceOfSupplier(),
                 c.getTaxNumber(),
                 c.getTaxType() != null ? c.getTaxType().name() : null,
                 c.getTaxRate() != null ? c.getTaxRate().doubleValue() : null,
@@ -64,7 +68,8 @@ public record CustomerDto(
                 c.getCurrentBalance() != null ? c.getCurrentBalance().doubleValue() : null,
                 c.getSource() != null ? c.getSource().name() : null,
                 assignedProductIds,
-                addrs
+                addrs,
+                c.getDeletedAt()
         );
     }
 }

@@ -189,7 +189,7 @@ public class InvoicePdfGenerator {
                 .add(kvRow("Reg. Address :",        safe(profile.registeredAddress(), "—"), bold, regular))
                 .add(kvRow("Operating Address :",   safe(profile.operatingAddress(), "—"),  bold, regular))
                 .add(kvRow("Contact No / Fax No :", safe(profile.phone(), "—"),             bold, regular))
-                .add(kvRow("Place of Supply :",     dots(25),                              bold, regular))
+                .add(kvRow("Place of Supply :",     safe(invoice.getCustomer().getPlaceOfSupplier(), dots(25)), bold, regular))
                 .setBorder(Border.NO_BORDER).setBorderRight(div).setPadding(8));
 
         parties.addCell(new Cell()
@@ -433,7 +433,7 @@ public class InvoicePdfGenerator {
         txt(buf, wrapLabeledField("Reg. Address      : ", safe(profile.registeredAddress(), "—"), W));
         txt(buf, wrapLabeledField("Operating Address : ", safe(profile.operatingAddress(), "—"), W));
         txt(buf, "Contact No/Fax No : " + safe(profile.phone(), "—") + "\n");
-        txt(buf, "Place of Supply   : " + dots(20) + "\n");
+        txt(buf, "Place of Supply   : " + safe(invoice.getCustomer().getPlaceOfSupplier(), dots(20)) + "\n");
         txt(buf, "-".repeat(W) + "\n\n");
 
         // ── Purchaser block ───────────────────────────────────────────────────

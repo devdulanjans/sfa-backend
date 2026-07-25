@@ -43,41 +43,47 @@ public interface CustomerRepository extends JpaRepository<Customer, UUID> {
     @Query(
         value = """
             SELECT c FROM Customer c LEFT JOIN FETCH c.category WHERE
+            (:includeDeleted = true OR c.deletedAt IS NULL) AND (
             LOWER(c.name) LIKE LOWER(CONCAT('%', :query, '%')) OR
-            LOWER(c.customerCode) LIKE LOWER(CONCAT('%', :query, '%'))
+            LOWER(c.customerCode) LIKE LOWER(CONCAT('%', :query, '%')) OR
+            LOWER(c.placeOfSupplier) LIKE LOWER(CONCAT('%', :query, '%')))
             ORDER BY LOWER(c.name) ASC
         """,
         countQuery = """
             SELECT COUNT(c) FROM Customer c WHERE
+            (:includeDeleted = true OR c.deletedAt IS NULL) AND (
             LOWER(c.name) LIKE LOWER(CONCAT('%', :query, '%')) OR
-            LOWER(c.customerCode) LIKE LOWER(CONCAT('%', :query, '%'))
+            LOWER(c.customerCode) LIKE LOWER(CONCAT('%', :query, '%')) OR
+            LOWER(c.placeOfSupplier) LIKE LOWER(CONCAT('%', :query, '%')))
         """
     )
-    Page<Customer> search(@Param("query") String query, Pageable pageable);
+    Page<Customer> search(@Param("query") String query, @Param("includeDeleted") boolean includeDeleted, Pageable pageable);
 
     // Filtered search — used when the caller only has access to a specific set of customers
     @Query(
         value = """
             SELECT c FROM Customer c LEFT JOIN FETCH c.category WHERE
-            c.id IN :ids AND (
+            c.id IN :ids AND (:includeDeleted = true OR c.deletedAt IS NULL) AND (
             LOWER(c.name) LIKE LOWER(CONCAT('%', :query, '%')) OR
-            LOWER(c.customerCode) LIKE LOWER(CONCAT('%', :query, '%')))
+            LOWER(c.customerCode) LIKE LOWER(CONCAT('%', :query, '%')) OR
+            LOWER(c.placeOfSupplier) LIKE LOWER(CONCAT('%', :query, '%')))
             ORDER BY LOWER(c.name) ASC
         """,
         countQuery = """
             SELECT COUNT(c) FROM Customer c WHERE
-            c.id IN :ids AND (
+            c.id IN :ids AND (:includeDeleted = true OR c.deletedAt IS NULL) AND (
             LOWER(c.name) LIKE LOWER(CONCAT('%', :query, '%')) OR
-            LOWER(c.customerCode) LIKE LOWER(CONCAT('%', :query, '%')))
+            LOWER(c.customerCode) LIKE LOWER(CONCAT('%', :query, '%')) OR
+            LOWER(c.placeOfSupplier) LIKE LOWER(CONCAT('%', :query, '%')))
         """
     )
-    Page<Customer> searchWithinIds(@Param("query") String query, @Param("ids") Set<UUID> ids, Pageable pageable);
+    Page<Customer> searchWithinIds(@Param("query") String query, @Param("includeDeleted") boolean includeDeleted, @Param("ids") Set<UUID> ids, Pageable pageable);
 
     // POS-generated customers only — used by the /pos billing dropdown and the admin "Customers" page under POS
     @Query(
         value = """
             SELECT c FROM Customer c LEFT JOIN FETCH c.category WHERE
-            c.source = 'POS' AND (
+            c.source = 'POS' AND c.deletedAt IS NULL AND (
             LOWER(c.name) LIKE LOWER(CONCAT('%', :query, '%')) OR
             LOWER(c.customerCode) LIKE LOWER(CONCAT('%', :query, '%')) OR
             LOWER(c.phone) LIKE LOWER(CONCAT('%', :query, '%')))
@@ -85,7 +91,7 @@ public interface CustomerRepository extends JpaRepository<Customer, UUID> {
         """,
         countQuery = """
             SELECT COUNT(c) FROM Customer c WHERE
-            c.source = 'POS' AND (
+            c.source = 'POS' AND c.deletedAt IS NULL AND (
             LOWER(c.name) LIKE LOWER(CONCAT('%', :query, '%')) OR
             LOWER(c.customerCode) LIKE LOWER(CONCAT('%', :query, '%')) OR
             LOWER(c.phone) LIKE LOWER(CONCAT('%', :query, '%')))

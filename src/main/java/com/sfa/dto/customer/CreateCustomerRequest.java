@@ -15,6 +15,7 @@ public record CreateCustomerRequest(
         String phone,
         String email,
         @Size(max = 100) String location,
+        @Size(max = 150) String placeOfSupplier,
         String taxNumber,
         String taxType,
         BigDecimal taxRate,
@@ -22,5 +23,6 @@ public record CreateCustomerRequest(
         String visibilityRule,
         BigDecimal creditLimit,
         Integer creditDays,
+        String source,
         @NotEmpty @Valid List<AddressRequest> addresses
 ) {}

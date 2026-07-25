@@ -46,6 +46,9 @@ public class Customer {
     @Column(length = 100)
     private String location;
 
+    @Column(name = "place_of_supplier", length = 150)
+    private String placeOfSupplier;
+
     @Column(name = "tax_number", length = 30)
     private String taxNumber;
 
@@ -115,6 +118,9 @@ public class Customer {
     @LastModifiedDate
     @Column(name = "updated_at")
     private Instant updatedAt;
+
+    @Column(name = "deleted_at")
+    private Instant deletedAt;
 
     public enum TaxType       { STANDARD, EXEMPT, ZERO_RATED }
     public enum VisibilityRule { ALL, ASSIGNED }

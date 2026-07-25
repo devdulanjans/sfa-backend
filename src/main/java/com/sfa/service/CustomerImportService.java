@@ -27,7 +27,7 @@ public class CustomerImportService {
     private static final String[] HEADERS = {
             "Customer Code", "Customer Name*", "Contact Person", "Phone", "Email",
             "Address Label", "Address*", "Tax Number", "Tax Type", "Credit Limit",
-            "Credit Days", "Visibility Rule"
+            "Credit Days", "Visibility Rule", "Location", "Place of Supplier"
     };
 
     private static final String[] TAX_TYPES        = {"STANDARD", "EXEMPT", "ZERO_RATED"};
@@ -104,6 +104,8 @@ public class CustomerImportService {
                 {"Credit Limit", "No", "Numeric amount, e.g. 50000."},
                 {"Credit Days", "No", "Whole number of days, e.g. 30."},
                 {"Visibility Rule", "No", "One of: ALL, ASSIGNED. Defaults to ALL."},
+                {"Location", "No", "e.g. Colombo"},
+                {"Place of Supplier", "No", "e.g. KEELLS - Anuradhapura"},
                 {"", "", ""},
                 {"Do not modify the header row on the \"Customers\" sheet. One row = one customer.", "", ""},
                 {"Save the file as .xlsx before uploading it back.", "", ""},
@@ -148,6 +150,8 @@ public class CustomerImportService {
                     String creditLimitStr = cellToString(row.getCell(9));
                     String creditDaysStr  = cellToString(row.getCell(10));
                     String visibilityRule = cellToString(row.getCell(11));
+                    String location       = cellToString(row.getCell(12));
+                    String placeOfSupplier = cellToString(row.getCell(13));
 
                     boolean rowIsBlank = isBlank(name) && isBlank(addressLine) && isBlank(customerCode)
                             && isBlank(phone) && isBlank(email);
@@ -171,8 +175,8 @@ public class CustomerImportService {
 
                     CreateCustomerRequest req = new CreateCustomerRequest(
                             code, name.trim(), blankToNull(contactPerson), blankToNull(phone), blankToNull(email),
-                            null, blankToNull(taxNumber), resolvedTaxType, null, null, resolvedVisibility,
-                            creditLimit, creditDays,
+                            blankToNull(location), blankToNull(placeOfSupplier), blankToNull(taxNumber), resolvedTaxType, null, null, resolvedVisibility,
+                            creditLimit, creditDays, null,
                             List.of(new AddressRequest(label, addressLine.trim())));
 
                     customerService.create(req);

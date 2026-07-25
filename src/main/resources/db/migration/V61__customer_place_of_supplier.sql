@@ -1,0 +1,1 @@
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS place_of_supplier VARCHAR(150);

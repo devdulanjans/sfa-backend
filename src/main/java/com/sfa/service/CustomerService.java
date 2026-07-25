@@ -52,11 +52,11 @@ public class CustomerService {
      * @param restrictedIds non-null non-empty → only return customers in that set;
      *                      null or empty → return all customers
      */
-    public Page<CustomerDto> list(String search, Set<UUID> restrictedIds, Pageable pageable) {
+    public Page<CustomerDto> list(String search, Set<UUID> restrictedIds, boolean includeDeleted, Pageable pageable) {
         String q = search == null ? "" : search;
         Page<Customer> page = (restrictedIds != null && !restrictedIds.isEmpty())
-                ? customerRepository.searchWithinIds(q, restrictedIds, pageable)
-                : customerRepository.search(q, pageable);
+                ? customerRepository.searchWithinIds(q, includeDeleted, restrictedIds, pageable)
+                : customerRepository.search(q, includeDeleted, pageable);
 
         // assignedProducts is a lazy @ManyToMany — touching it per-row here would
         // either N+1 or (per CustomerDto's no-arg overload) silently come back
@@ -104,10 +104,21 @@ public class CustomerService {
     }
 
     @Transactional
-    public void deactivate(UUID id) {
+    public void softDelete(UUID id) {
         Customer c = findOrThrow(id);
-        c.setStatus(Customer.CustomerStatus.INACTIVE);
+        if (c.getDeletedAt() == null) {
+            c.setDeletedAt(Instant.now());
+            customerRepository.save(c);
+            auditLogService.log(null, "DELETE", "Customer", c.getId(), null, null);
+        }
+    }
+
+    @Transactional
+    public void restore(UUID id) {
+        Customer c = findOrThrow(id);
+        c.setDeletedAt(null);
         customerRepository.save(c);
+        auditLogService.log(null, "RESTORE", "Customer", c.getId(), null, null);
     }
 
     @Transactional
@@ -141,6 +152,7 @@ public class CustomerService {
         c.setPhone(req.phone());
         c.setEmail(req.email());
         c.setLocation(req.location());
+        c.setPlaceOfSupplier(req.placeOfSupplier());
         c.setTaxNumber(req.taxNumber());
 
         // Customer.addresses has a @Builder.Default initializer, which Lombok only applies via
@@ -180,6 +192,9 @@ public class CustomerService {
         }
         c.setCreditLimit(req.creditLimit());
         c.setCreditDays(req.creditDays());
+        if (req.source() != null) {
+            c.setSource(Customer.CustomerSource.valueOf(req.source()));
+        }
     }
 
     public CustomerAnalyticsDto getAnalytics(UUID customerId) {
