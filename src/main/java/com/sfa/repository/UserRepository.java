@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -27,4 +28,14 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     List<User> findActiveByRoleName(@Param("roleName") String roleName, @Param("status") User.UserStatus status);
 
     Optional<User> findByCustomerId(UUID customerId);
+
+    Page<User> findByUsernameNotIn(Collection<String> usernames, Pageable pageable);
+
+    @Query(value = "SELECT u FROM User u JOIN u.distributors d WHERE d.id = :distributorId AND u.username NOT IN :hidden",
+           countQuery = "SELECT COUNT(u) FROM User u JOIN u.distributors d WHERE d.id = :distributorId AND u.username NOT IN :hidden")
+    Page<User> findByDistributorIdExcludingUsernames(@Param("distributorId") UUID distributorId,
+                                                      @Param("hidden") Collection<String> hidden,
+                                                      Pageable pageable);
+
+    List<User> findByUsernameIn(Collection<String> usernames);
 }

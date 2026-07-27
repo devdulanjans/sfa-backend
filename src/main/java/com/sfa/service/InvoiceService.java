@@ -65,12 +65,26 @@ public class InvoiceService {
 
     @Transactional(readOnly = true)
     public Page<InvoiceSummaryDto> listInvoices(InvoiceFilter f, Pageable pageable) {
+        Specification<Invoice> spec = buildInvoiceSpec(f);
+        return invoiceRepo.findAll(spec, pageable).map(InvoiceSummaryDto::from);
+    }
+
+    /** Same filters as {@link #listInvoices}, unpaged entities — used by the bulk
+     *  full-detail (one row per product line) export, which needs the actual
+     *  Invoice/Order/OrderItem/Product entities rather than the summary DTO. */
+    @Transactional(readOnly = true)
+    public List<Invoice> getInvoicesForExport(InvoiceFilter f) {
+        Specification<Invoice> spec = buildInvoiceSpec(f);
+        return invoiceRepo.findAll(spec);
+    }
+
+    private Specification<Invoice> buildInvoiceSpec(InvoiceFilter f) {
         final Instant createdFromInst = f.createdFrom() != null
                 ? f.createdFrom().atStartOfDay(ZoneOffset.UTC).toInstant() : null;
         final Instant createdToInst   = f.createdTo()   != null
                 ? f.createdTo().plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant() : null;
 
-        Specification<Invoice> spec = (root, query, cb) -> {
+        return (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
 
             final Join<?, ?> order;
@@ -117,8 +131,6 @@ public class InvoiceService {
 
             return cb.and(predicates.toArray(new Predicate[0]));
         };
-
-        return invoiceRepo.findAll(spec, pageable).map(InvoiceSummaryDto::from);
     }
 
     private static String blank(String s) {

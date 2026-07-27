@@ -18,7 +18,7 @@ import java.util.UUID;
     @Index(name = "idx_promo_active_date", columnList = "is_active,start_date,end_date")
 })
 @EntityListeners(AuditingEntityListener.class)
-@Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor
+@Getter @Setter @Builder(toBuilder = true) @NoArgsConstructor @AllArgsConstructor
 public class Promotion {
 
     @Id
@@ -60,6 +60,14 @@ public class Promotion {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "customer_id")
     private Customer customer;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "customer_group_id")
+    private CustomerGroup customerGroup;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "product_group_id")
+    private ProductGroup productGroup;
 
     @Column(name = "start_date", nullable = false)
     private LocalDate startDate;

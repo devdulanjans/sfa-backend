@@ -68,6 +68,8 @@ public class User {
     /**
      * Customers explicitly assigned to this user.
      * Empty set = access ALL customers; non-empty = access only listed customers.
+     * The user's effective customer scope is this set UNION every assigned
+     * CustomerGroup's members (see UserDetailsImpl) — still empty overall = ALL.
      */
     @JsonIgnore
     @ManyToMany(fetch = FetchType.LAZY)
@@ -78,6 +80,18 @@ public class User {
     )
     @Builder.Default
     private Set<Customer> assignedCustomers = new HashSet<>();
+
+    /** Customer Groups assigned to this user — every member of each group is added
+     *  to this user's effective customer scope alongside assignedCustomers. */
+    @JsonIgnore
+    @ManyToMany(fetch = FetchType.LAZY)
+    @JoinTable(
+        name = "user_customer_groups",
+        joinColumns = @JoinColumn(name = "user_id"),
+        inverseJoinColumns = @JoinColumn(name = "customer_group_id")
+    )
+    @Builder.Default
+    private Set<CustomerGroup> customerGroups = new HashSet<>();
 
     @CreatedDate
     @Column(name = "created_at", nullable = false, updatable = false)

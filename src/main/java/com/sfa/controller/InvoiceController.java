@@ -6,8 +6,11 @@ import com.sfa.entity.Role;
 import com.sfa.license.LicensedPackage;
 import com.sfa.license.RequiresLicense;
 import com.sfa.security.UserDetailsImpl;
+import com.sfa.service.DetailedExportGenerator;
+import com.sfa.service.InvoiceExportGenerator;
 import com.sfa.service.InvoiceService;
 import com.sfa.service.InvoiceService.InvoiceFilter;
+import com.sfa.exception.BusinessException;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -23,7 +26,9 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.io.IOException;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -35,6 +40,8 @@ import java.util.UUID;
 public class InvoiceController {
 
     private final InvoiceService invoiceService;
+    private final InvoiceExportGenerator invoiceExportGenerator;
+    private final DetailedExportGenerator detailedExportGenerator;
 
     @GetMapping
     @Operation(summary = "List invoices with optional filters")
@@ -52,18 +59,75 @@ public class InvoiceController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dueTo,
             @PageableDefault(size = 20, sort = "issuedDate", direction = Sort.Direction.DESC) Pageable pageable) {
 
+        InvoiceFilter filter = buildFilter(user, invoiceNo, orderNo, customerId, salesRepId,
+                createdFrom, createdTo, issuedFrom, issuedTo, dueFrom, dueTo);
+
+        return ResponseEntity.ok(invoiceService.listInvoices(filter, pageable));
+    }
+
+    @GetMapping("/export")
+    @Operation(summary = "Export invoices matching the given filters")
+    public ResponseEntity<byte[]> export(
+            @AuthenticationPrincipal UserDetailsImpl user,
+            @RequestParam String format,
+            @RequestParam(required = false) String invoiceNo,
+            @RequestParam(required = false) String orderNo,
+            @RequestParam(required = false) UUID customerId,
+            @RequestParam(required = false) UUID salesRepId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createdFrom,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createdTo,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate issuedFrom,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate issuedTo,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dueFrom,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dueTo) throws IOException {
+
+        InvoiceFilter filter = buildFilter(user, invoiceNo, orderNo, customerId, salesRepId,
+                createdFrom, createdTo, issuedFrom, issuedTo, dueFrom, dueTo);
+        List<InvoiceSummaryDto> rows = invoiceService.listInvoices(filter, Pageable.unpaged()).getContent();
+
+        byte[] bytes;
+        MediaType contentType;
+        String filename;
+
+        switch (format.toLowerCase()) {
+            case "xlsx" -> {
+                bytes = invoiceExportGenerator.generateExcel(rows);
+                contentType = MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+                filename = "invoices.xlsx";
+            }
+            case "csv" -> {
+                bytes = invoiceExportGenerator.generateCsv(rows);
+                contentType = MediaType.parseMediaType("text/csv");
+                filename = "invoices.csv";
+            }
+            case "pdf" -> {
+                bytes = invoiceExportGenerator.generatePdf(rows);
+                contentType = MediaType.APPLICATION_PDF;
+                filename = "invoices.pdf";
+            }
+            default -> throw new BusinessException("Unsupported export format: " + format);
+        }
+
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                .contentType(contentType)
+                .body(bytes);
+    }
+
+    private InvoiceFilter buildFilter(
+            UserDetailsImpl user, String invoiceNo, String orderNo, UUID customerId, UUID salesRepId,
+            LocalDate createdFrom, LocalDate createdTo, LocalDate issuedFrom, LocalDate issuedTo,
+            LocalDate dueFrom, LocalDate dueTo) {
         // SALES_REP always sees only their own invoices, regardless of the salesRepId requested
         UUID effectiveSalesRepId = (user != null && Role.SALES_REP.equals(user.getRoleName()))
                 ? user.getId()
                 : salesRepId;
 
-        InvoiceFilter filter = new InvoiceFilter(
+        return new InvoiceFilter(
                 invoiceNo, orderNo, customerId, effectiveSalesRepId,
                 createdFrom, createdTo,
                 issuedFrom,  issuedTo,
                 dueFrom,     dueTo);
-
-        return ResponseEntity.ok(invoiceService.listInvoices(filter, pageable));
     }
 
     @PostMapping("/generate/{orderId}")
@@ -77,6 +141,41 @@ public class InvoiceController {
     @GetMapping("/{id}")
     public ResponseEntity<Invoice> get(@PathVariable UUID id) {
         return ResponseEntity.ok(invoiceService.getInvoice(id));
+    }
+
+    @GetMapping("/{id}/export-details")
+    @Operation(summary = "Export this invoice's full detail (one row per product line) as Excel — for ERP import")
+    public ResponseEntity<byte[]> exportDetails(@PathVariable UUID id) throws IOException {
+        byte[] bytes = detailedExportGenerator.generateInvoiceExcel(invoiceService.getInvoice(id));
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"invoice-details.xlsx\"")
+                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(bytes);
+    }
+
+    @GetMapping("/export-details")
+    @Operation(summary = "Bulk-export every invoice matching the given filters, full detail (one row per product line) — for ERP import")
+    public ResponseEntity<byte[]> exportDetailsBulk(
+            @AuthenticationPrincipal UserDetailsImpl user,
+            @RequestParam(required = false) String invoiceNo,
+            @RequestParam(required = false) String orderNo,
+            @RequestParam(required = false) UUID customerId,
+            @RequestParam(required = false) UUID salesRepId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createdFrom,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createdTo,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate issuedFrom,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate issuedTo,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dueFrom,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dueTo) throws IOException {
+
+        InvoiceFilter filter = buildFilter(user, invoiceNo, orderNo, customerId, salesRepId,
+                createdFrom, createdTo, issuedFrom, issuedTo, dueFrom, dueTo);
+        var invoices = invoiceService.getInvoicesForExport(filter);
+        byte[] bytes = detailedExportGenerator.generateInvoicesDetailExcel(invoices);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"invoices-details.xlsx\"")
+                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(bytes);
     }
 
     @GetMapping("/by-order/{orderId}")

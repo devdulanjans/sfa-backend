@@ -15,6 +15,8 @@ public record PromotionResponseDto(
         BigDecimal discountValue,
         List<ProductSummary> products,
         CustomerSummary customer,
+        GroupSummary customerGroup,
+        GroupSummary productGroup,
         ProductSummary freeProduct,
         Integer maxFreeCount,
         Integer minOrderQty,
@@ -26,10 +28,13 @@ public record PromotionResponseDto(
 ) {
     public record ProductSummary(UUID id, String name, String productCode) {}
     public record CustomerSummary(UUID id, String name, String customerCode) {}
+    public record GroupSummary(UUID id, String name) {}
 
     public static PromotionResponseDto from(Promotion p) {
         var c  = p.getCustomer();
         var fp = p.getFreeProduct();
+        var cg = p.getCustomerGroup();
+        var pg = p.getProductGroup();
         return new PromotionResponseDto(
                 p.getId(),
                 p.getName(),
@@ -40,6 +45,8 @@ public record PromotionResponseDto(
                                 pr.getId(), pr.getName(), pr.getProductCode()))
                         .toList(),
                 c  == null ? null : new CustomerSummary(c.getId(), c.getName(), c.getCustomerCode()),
+                cg == null ? null : new GroupSummary(cg.getId(), cg.getName()),
+                pg == null ? null : new GroupSummary(pg.getId(), pg.getName()),
                 fp == null ? null : new ProductSummary(fp.getId(), fp.getName(), fp.getProductCode()),
                 p.getMaxFreeCount(),
                 p.getMinOrderQty(),

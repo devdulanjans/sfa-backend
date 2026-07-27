@@ -51,6 +51,13 @@ public class SystemSettingService {
                 .orElse(false);
     }
 
+    @Transactional(readOnly = true)
+    public boolean isSalesTargetEnabled() {
+        return repo.findById("sales_target_enabled")
+                .map(s -> Boolean.parseBoolean(s.getValue()))
+                .orElse(false);
+    }
+
     public SystemSetting update(String key, String value, UUID updatedBy) {
         SystemSetting setting = repo.findById(key)
                 .orElseThrow(() -> new ResourceNotFoundException("Setting not found with key: " + key));

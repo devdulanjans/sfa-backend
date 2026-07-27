@@ -14,5 +14,6 @@ public record UpdateUserRequest(
         @NotNull UUID roleId,
         List<UUID> distributorIds,
         List<UUID> customerIds,
+        List<UUID> customerGroupIds,
         @Size(min = 8) String password   // null = keep existing; non-null must be ≥ 8 chars
 ) {}

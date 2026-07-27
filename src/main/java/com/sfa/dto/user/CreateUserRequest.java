@@ -12,5 +12,6 @@ public record CreateUserRequest(
         @NotNull UUID roleId,
         List<UUID> distributorIds,
         List<UUID> customerIds,
+        List<UUID> customerGroupIds,
         UUID customerId       // for CUSTOMER role: the single customer this user represents
 ) {}

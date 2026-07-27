@@ -18,7 +18,9 @@ public record UserDto(
         List<DistributorDto> distributors,
         int     assignedCustomerCount,
         boolean customerAccessAll,
-        List<UUID> assignedCustomerIds
+        List<UUID> assignedCustomerIds,
+        int     customerGroupCount,
+        List<UUID> customerGroupIds
 ) {
     public static UserDto from(User u) {
         List<DistributorDto> dists = u.getDistributors() != null
@@ -27,7 +29,11 @@ public record UserDto(
         List<UUID> customerIds = u.getAssignedCustomers() != null
                 ? u.getAssignedCustomers().stream().map(c -> c.getId()).toList()
                 : List.of();
+        List<UUID> groupIds = u.getCustomerGroups() != null
+                ? u.getCustomerGroups().stream().map(g -> g.getId()).toList()
+                : List.of();
         int customerCount = customerIds.size();
+        int groupCount = groupIds.size();
         return new UserDto(
                 u.getId(),
                 u.getUsername(),
@@ -39,8 +45,10 @@ public record UserDto(
                 u.getCustomer() != null ? u.getCustomer().getId() : null,
                 dists,
                 customerCount,
-                customerCount == 0,
-                customerIds
+                customerCount == 0 && groupCount == 0,
+                customerIds,
+                groupCount,
+                groupIds
         );
     }
 }

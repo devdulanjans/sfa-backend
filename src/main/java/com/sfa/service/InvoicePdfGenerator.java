@@ -761,11 +761,11 @@ public class InvoicePdfGenerator {
 
     private byte[] fetchLogoBytes(CompanyProfileDto profile) {
         if (profile.logoUrl() == null) return null;
-        try {
-            return companyProfileService.getLogoBytes();
-        } catch (Exception e) {
-            return null; // fall back to a text-only header rather than fail the whole invoice
-        }
+        // tryGetLogoBytes() (not getLogoBytes()) — its own catch lives inside the
+        // @Transactional method, so a storage failure here can't poison the invoice
+        // generation transaction this runs inside of. See its Javadoc for why catching
+        // the exception out here instead wouldn't be enough.
+        return companyProfileService.tryGetLogoBytes();
     }
 
     private String formatRate(BigDecimal rate) {

@@ -14,6 +14,7 @@ import com.sfa.entity.Product;
 import com.sfa.exception.BusinessException;
 import com.sfa.exception.ResourceNotFoundException;
 import com.sfa.repository.CustomerCategoryRepository;
+import com.sfa.repository.CustomerGroupRepository;
 import com.sfa.repository.CustomerRepository;
 import com.sfa.repository.OrderRepository;
 import com.sfa.repository.ProductRepository;
@@ -41,6 +42,7 @@ public class CustomerService {
 
     private final CustomerRepository customerRepository;
     private final CustomerCategoryRepository categoryRepository;
+    private final CustomerGroupRepository customerGroupRepository;
     private final OrderRepository orderRepository;
     private final ProductRepository productRepository;
     private final AuditLogService auditLogService;
@@ -58,27 +60,48 @@ public class CustomerService {
                 ? customerRepository.searchWithinIds(q, includeDeleted, restrictedIds, pageable)
                 : customerRepository.search(q, includeDeleted, pageable);
 
-        // assignedProducts is a lazy @ManyToMany — touching it per-row here would
-        // either N+1 or (per CustomerDto's no-arg overload) silently come back
-        // empty, which previously made customer-specific product visibility
-        // silently fail for any list/sync-derived customer (mobile never sees a
-        // customer's assigned products, so it can never restrict the catalog).
-        // Bulk-load the whole page's assignments in one query instead.
-        List<UUID> pageCustomerIds = page.getContent().stream().map(Customer::getId).toList();
-        Map<UUID, List<UUID>> assignedProductIdsByCustomer = new java.util.HashMap<>();
-        if (!pageCustomerIds.isEmpty()) {
-            for (var row : customerRepository.findAssignedProductIdsForCustomers(pageCustomerIds)) {
-                assignedProductIdsByCustomer
+        List<CustomerDto> dtos = toDtos(page.getContent());
+        return new org.springframework.data.domain.PageImpl<>(dtos, pageable, page.getTotalElements());
+    }
+
+    public CustomerDto getById(UUID id) {
+        return toDtos(List.of(findOrThrow(id))).get(0);
+    }
+
+    /**
+     * Bulk-builds DTOs for a list of customers, populating both {@code assignedProductIds}
+     * (direct-only — what the admin "Select Products" picker reads/writes back, must never
+     * silently include group-derived products) and {@code effectiveAssignedProductIds} (direct
+     * union every customer group the customer belongs to — what mobile's order-creation catalog
+     * filter reads). This is the single place that computes the group-inclusive value; reused by
+     * {@link #list} and {@link #getById} and by {@code SyncController} so all three stay
+     * consistent. assignedProducts/customer-group-membership are both lazy @ManyToMany — touching
+     * them per-row here would either N+1 or (per CustomerDto's no-arg overload) silently come back
+     * empty, so both are bulk-loaded in one query each regardless of how many customers are passed in.
+     */
+    public List<CustomerDto> toDtos(List<Customer> customers) {
+        List<UUID> customerIds = customers.stream().map(Customer::getId).toList();
+        Map<UUID, List<UUID>> directByCustomer = new java.util.HashMap<>();
+        Map<UUID, List<UUID>> groupByCustomer = new java.util.HashMap<>();
+        if (!customerIds.isEmpty()) {
+            for (var row : customerRepository.findAssignedProductIdsForCustomers(customerIds)) {
+                directByCustomer
+                        .computeIfAbsent(row.getCustomerId(), k -> new java.util.ArrayList<>())
+                        .add(row.getProductId());
+            }
+            for (var row : customerGroupRepository.findAssignedProductIdsForCustomers(customerIds)) {
+                groupByCustomer
                         .computeIfAbsent(row.getCustomerId(), k -> new java.util.ArrayList<>())
                         .add(row.getProductId());
             }
         }
 
-        return page.map(c -> CustomerDto.from(c, assignedProductIdsByCustomer.getOrDefault(c.getId(), List.of())));
-    }
-
-    public CustomerDto getById(UUID id) {
-        return CustomerDto.from(findOrThrow(id));
+        return customers.stream().map(c -> {
+            List<UUID> direct = directByCustomer.getOrDefault(c.getId(), List.of());
+            java.util.Set<UUID> effective = new java.util.LinkedHashSet<>(direct);
+            effective.addAll(groupByCustomer.getOrDefault(c.getId(), List.of()));
+            return CustomerDto.from(c, direct, List.copyOf(effective));
+        }).toList();
     }
 
     @Transactional

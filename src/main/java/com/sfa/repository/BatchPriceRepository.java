@@ -13,47 +13,82 @@ import java.util.UUID;
 
 public interface BatchPriceRepository extends JpaRepository<BatchPrice, UUID> {
 
+    boolean existsByCustomerGroupId(UUID customerGroupId);
+    boolean existsByProductGroupId(UUID productGroupId);
+
     /**
-     * Best customer-specific tier for the given quantity — the qualifying row (minQty null or
-     * &lt;= qty) with the highest minQty wins (a null minQty is treated as the qty-1 baseline
-     * tier, so it only wins when no higher tier is met), tie-broken by most recent startDate.
-     * Used by {@link com.sfa.service.PricingEngine#resolve} so multi-tier customer batch
-     * pricing (e.g. qty&gt;=10 vs qty&gt;=20) picks the tier that actually matches the quantity
-     * being priced, instead of an arbitrary row.
+     * Best customer-targeted tier for the given quantity — matches a row whose customer target
+     * (direct customer OR customer group membership) and product target (direct product OR
+     * product group membership) both cover the given ids. Direct matches outrank group matches on
+     * both sides (see ORDER BY); within the same specificity, the qualifying row (minQty null or
+     * &lt;= qty) with the highest minQty wins, tie-broken by most recent startDate. Explicit LEFT
+     * JOINs on product/customer are required here — the implicit dot-path {@code bp.product.id}
+     * generates an inner join in Hibernate, which would silently exclude product-group/
+     * customer-group rows (where the direct FK is null) from ever matching via the OR below.
      */
     @Query("""
         SELECT bp FROM BatchPrice bp
-        WHERE bp.product.id = :productId
-          AND bp.customer.id = :customerId
+        LEFT JOIN bp.product p
+        LEFT JOIN bp.customer c
+        WHERE (p.id = :productId
+               OR (bp.productGroup IS NOT NULL AND EXISTS (
+                   SELECT 1 FROM ProductGroup pg JOIN pg.members pm
+                   WHERE pg = bp.productGroup AND pm.id = :productId)))
+          AND (c.id = :customerId
+               OR (bp.customerGroup IS NOT NULL AND EXISTS (
+                   SELECT 1 FROM CustomerGroup cg JOIN cg.members cm
+                   WHERE cg = bp.customerGroup AND cm.id = :customerId)))
           AND bp.startDate <= :date
           AND (bp.endDate IS NULL OR bp.endDate >= :date)
           AND (bp.minQty IS NULL OR bp.minQty <= :qty)
-        ORDER BY COALESCE(bp.minQty, 0) DESC, bp.startDate DESC
+        ORDER BY
+          CASE WHEN c.id IS NOT NULL THEN 0 ELSE 1 END,
+          CASE WHEN p.id IS NOT NULL THEN 0 ELSE 1 END,
+          COALESCE(bp.minQty, 0) DESC, bp.startDate DESC
         LIMIT 1
     """)
-    Optional<BatchPrice> findBestCustomerBatchPrice(UUID productId, UUID customerId, BigDecimal qty, LocalDate date);
+    Optional<BatchPrice> findBestCustomerBatchPrice(
+            @Param("productId") UUID productId, @Param("customerId") UUID customerId,
+            @Param("qty") BigDecimal qty, @Param("date") LocalDate date);
 
-    /** General-tier equivalent of {@link #findBestCustomerBatchPrice}. */
+    /** General-tier equivalent of {@link #findBestCustomerBatchPrice} — no customer or customer
+     *  group targeting at all (applies to every customer), matched against the product side
+     *  (direct or group) as above. */
     @Query("""
         SELECT bp FROM BatchPrice bp
-        WHERE bp.product.id = :productId
-          AND bp.customer IS NULL
+        LEFT JOIN bp.product p
+        WHERE (p.id = :productId
+               OR (bp.productGroup IS NOT NULL AND EXISTS (
+                   SELECT 1 FROM ProductGroup pg JOIN pg.members pm
+                   WHERE pg = bp.productGroup AND pm.id = :productId)))
+          AND bp.customer IS NULL AND bp.customerGroup IS NULL
           AND bp.startDate <= :date
           AND (bp.endDate IS NULL OR bp.endDate >= :date)
           AND (bp.minQty IS NULL OR bp.minQty <= :qty)
-        ORDER BY COALESCE(bp.minQty, 0) DESC, bp.startDate DESC
+        ORDER BY
+          CASE WHEN p.id IS NOT NULL THEN 0 ELSE 1 END,
+          COALESCE(bp.minQty, 0) DESC, bp.startDate DESC
         LIMIT 1
     """)
-    Optional<BatchPrice> findBestGeneralBatchPrice(UUID productId, BigDecimal qty, LocalDate date);
+    Optional<BatchPrice> findBestGeneralBatchPrice(
+            @Param("productId") UUID productId, @Param("qty") BigDecimal qty, @Param("date") LocalDate date);
 
-    /** All active tiers for a product visible to a customer.
+    /** All active tiers for a product visible to a customer (direct or group match on both sides).
      *  LEFT JOIN FETCH ensures customer is accessible after the session closes.
      *  Caller sorts: customer-specific first, then by minQty ascending. */
     @Query("""
         SELECT bp FROM BatchPrice bp
         LEFT JOIN FETCH bp.customer
-        WHERE bp.product.id = :productId
-          AND (bp.customer IS NULL OR bp.customer.id = :customerId)
+        LEFT JOIN bp.product p
+        WHERE (p.id = :productId
+               OR (bp.productGroup IS NOT NULL AND EXISTS (
+                   SELECT 1 FROM ProductGroup pg JOIN pg.members pm
+                   WHERE pg = bp.productGroup AND pm.id = :productId)))
+          AND ((bp.customer IS NULL AND bp.customerGroup IS NULL)
+               OR bp.customer.id = :customerId
+               OR (bp.customerGroup IS NOT NULL AND EXISTS (
+                   SELECT 1 FROM CustomerGroup cg JOIN cg.members cm
+                   WHERE cg = bp.customerGroup AND cm.id = :customerId)))
           AND bp.startDate <= :date
           AND (bp.endDate IS NULL OR bp.endDate >= :date)
     """)
@@ -63,16 +98,22 @@ public interface BatchPriceRepository extends JpaRepository<BatchPrice, UUID> {
             @Param("date") LocalDate date);
 
     /**
-     * All active customer-specific batch prices for a given customer across all products.
-     * Used by mobile to pre-load the effective price map before browsing — note this is
-     * qty-agnostic (returns every active row per product, most-recent startDate first), so
-     * {@link com.sfa.controller.PricingController#customerOverrides} must filter out products
-     * with more than one active tier before treating a row as a flat "override" price.
+     * All active customer-targeted (direct or via customer group) batch prices for a given
+     * customer across all products. Used by mobile to pre-load the effective price map before
+     * browsing — note this is qty-agnostic (returns every active row per product, most-recent
+     * startDate first), so {@link com.sfa.controller.PricingController#customerOverrides} must
+     * filter out rows with no direct product (product-group targeted — not a simple per-product
+     * override) and products with more than one active tier before treating a row as a flat
+     * "override" price. LEFT JOIN FETCH on product since a row's product may legitimately be null
+     * (product-group targeted).
      */
     @Query("""
         SELECT bp FROM BatchPrice bp
-        JOIN FETCH bp.product
-        WHERE bp.customer.id = :customerId
+        LEFT JOIN FETCH bp.product
+        WHERE (bp.customer.id = :customerId
+               OR (bp.customerGroup IS NOT NULL AND EXISTS (
+                   SELECT 1 FROM CustomerGroup cg JOIN cg.members cm
+                   WHERE cg = bp.customerGroup AND cm.id = :customerId)))
           AND bp.startDate <= :date
           AND (bp.endDate IS NULL OR bp.endDate >= :date)
         ORDER BY bp.startDate DESC
@@ -82,18 +123,40 @@ public interface BatchPriceRepository extends JpaRepository<BatchPrice, UUID> {
             @Param("date") LocalDate date);
 
     /**
-     * Product IDs with ANY active batch price visible to this customer (general
-     * tiers, or tiers specific to this customer). Used by mobile to bulk-check
-     * which products in a list have batch pricing, so it can hide the plain
-     * default price for them (the real price depends on the qty tier picked).
+     * Direct product IDs (not via a product group) with any active batch price visible to this
+     * customer (general tiers, customer-specific, or via customer group). Combined with
+     * {@link #findActiveGroupProductIdsVisibleToCustomer} by the caller — kept as two queries
+     * rather than one UNION since cross-database JPQL UNION support is inconsistent.
      */
     @Query("""
         SELECT DISTINCT bp.product.id FROM BatchPrice bp
-        WHERE (bp.customer IS NULL OR bp.customer.id = :customerId)
+        WHERE bp.product IS NOT NULL
+          AND ((bp.customer IS NULL AND bp.customerGroup IS NULL)
+               OR bp.customer.id = :customerId
+               OR (bp.customerGroup IS NOT NULL AND EXISTS (
+                   SELECT 1 FROM CustomerGroup cg JOIN cg.members cm
+                   WHERE cg = bp.customerGroup AND cm.id = :customerId)))
           AND bp.startDate <= :date
           AND (bp.endDate IS NULL OR bp.endDate >= :date)
     """)
-    List<UUID> findActiveProductIdsVisibleToCustomer(
+    List<UUID> findActiveDirectProductIdsVisibleToCustomer(
+            @Param("customerId") UUID customerId,
+            @Param("date") LocalDate date);
+
+    /** Product IDs reachable via a product-group-targeted batch price visible to this customer —
+     *  every current member of any such group. See {@link #findActiveDirectProductIdsVisibleToCustomer}. */
+    @Query("""
+        SELECT DISTINCT pgm.id FROM BatchPrice bp JOIN bp.productGroup pg JOIN pg.members pgm
+        WHERE bp.productGroup IS NOT NULL
+          AND ((bp.customer IS NULL AND bp.customerGroup IS NULL)
+               OR bp.customer.id = :customerId
+               OR (bp.customerGroup IS NOT NULL AND EXISTS (
+                   SELECT 1 FROM CustomerGroup cg JOIN cg.members cm
+                   WHERE cg = bp.customerGroup AND cm.id = :customerId)))
+          AND bp.startDate <= :date
+          AND (bp.endDate IS NULL OR bp.endDate >= :date)
+    """)
+    List<UUID> findActiveGroupProductIdsVisibleToCustomer(
             @Param("customerId") UUID customerId,
             @Param("date") LocalDate date);
 }

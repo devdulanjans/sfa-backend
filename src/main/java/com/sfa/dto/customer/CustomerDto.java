@@ -27,6 +27,7 @@ public record CustomerDto(
         Double currentBalance,
         String source,
         List<UUID> assignedProductIds,
+        List<UUID> effectiveAssignedProductIds,
         List<CustomerAddressDto> addresses,
         Instant deletedAt
 ) {
@@ -42,8 +43,26 @@ public record CustomerDto(
      * for a batch of customers (e.g. list/sync endpoints) — {@code assignedProducts}
      * is a lazy @ManyToMany, so touching it per-row here would either N+1 or
      * (per the no-arg overload's isInitialized guard) silently come back empty.
+     *
+     * {@code effectiveAssignedProductIds} is not computed here (no customer-group
+     * context available at this call site) — it defaults to the same direct-only
+     * list. Callers that need the group-inclusive value should use
+     * {@link CustomerService#toDtos} instead, which is the only place that unions
+     * in a customer's customer-group assignments.
      */
     public static CustomerDto from(Customer c, List<UUID> assignedProductIds) {
+        return from(c, assignedProductIds, assignedProductIds);
+    }
+
+    /**
+     * {@code effectiveAssignedProductIds} is the customer's own {@code assignedProductIds}
+     * (direct-only — this is also what the admin "Select Products" picker reads and writes
+     * back, so it must never silently include group-derived products) unioned with every
+     * customer group the customer belongs to. Mobile's order-creation catalog filter reads
+     * this field specifically so group-assigned products restrict the catalog exactly like
+     * direct assignments already do.
+     */
+    public static CustomerDto from(Customer c, List<UUID> assignedProductIds, List<UUID> effectiveAssignedProductIds) {
         List<CustomerAddressDto> addrs = c.getAddresses().stream()
                 .map(CustomerAddressDto::from)
                 .toList();
@@ -68,6 +87,7 @@ public record CustomerDto(
                 c.getCurrentBalance() != null ? c.getCurrentBalance().doubleValue() : null,
                 c.getSource() != null ? c.getSource().name() : null,
                 assignedProductIds,
+                effectiveAssignedProductIds,
                 addrs,
                 c.getDeletedAt()
         );

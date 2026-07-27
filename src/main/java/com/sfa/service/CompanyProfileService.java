@@ -86,6 +86,25 @@ public class CompanyProfileService {
         return storage.download(p.getLogoObjectPath());
     }
 
+    /**
+     * Best-effort logo fetch for opportunistic embedding (e.g. invoice PDFs) — swallows any
+     * failure and returns null instead of throwing. {@link #getLogoBytes} is @Transactional,
+     * so if storage is unreachable, the exception it throws marks the ambient transaction
+     * rollback-only the moment it crosses that method's own proxy boundary — a caller
+     * catching the exception afterward (e.g. invoice generation falling back to a text-only
+     * header) doesn't undo that, and the caller's own transaction later fails to commit with
+     * UnexpectedRollbackException. Catching here, inside the transactional method itself,
+     * means the exception never escapes this proxy, so nothing gets poisoned.
+     */
+    @Transactional(readOnly = true)
+    public byte[] tryGetLogoBytes() {
+        try {
+            return getLogoBytes();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     @Transactional(readOnly = true)
     public String getLogoContentType() {
         return getSingleton().getLogoContentType();

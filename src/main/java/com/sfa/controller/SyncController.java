@@ -8,6 +8,7 @@ import com.sfa.license.RequiresLicense;
 import com.sfa.repository.CustomerRepository;
 import com.sfa.repository.ProductRepository;
 import com.sfa.security.UserDetailsImpl;
+import com.sfa.service.CustomerService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -31,6 +32,7 @@ public class SyncController {
 
     private final CustomerRepository customerRepository;
     private final ProductRepository  productRepository;
+    private final CustomerService    customerService;
 
     @GetMapping("/delta")
     public Map<String, Object> delta(
@@ -57,11 +59,12 @@ public class SyncController {
                 ? user.getAssignedCustomerIds()
                 : null;
 
+        // Routed through CustomerService.toDtos so effectiveAssignedProductIds (direct +
+        // customer-group assignments) is populated the same way as the admin list/get
+        // endpoints — this is what mobile's order-creation catalog filter reads.
         List<CustomerDto> customers = restricted != null
-                ? customerRepository.findByIdsUpdatedSinceWithProducts(restricted, threshold)
-                        .stream().map(CustomerDto::from).toList()
-                : customerRepository.findUpdatedSinceWithProducts(threshold)
-                        .stream().map(CustomerDto::from).toList();
+                ? customerService.toDtos(customerRepository.findByIdsUpdatedSinceWithProducts(restricted, threshold))
+                : customerService.toDtos(customerRepository.findUpdatedSinceWithProducts(threshold));
 
         List<ProductDto> products = productRepository.findUpdatedSince(threshold)
                 .stream().map(ProductDto::from).toList();

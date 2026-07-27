@@ -68,6 +68,7 @@ public class PricingController {
     public Map<String, BigDecimal> customerOverrides(@RequestParam UUID customerId) {
         List<BatchPrice> rows = batchPriceRepo.findAllActiveForCustomer(customerId, LocalDate.now());
         Map<UUID, List<BatchPrice>> byProduct = rows.stream()
+                .filter(bp -> bp.getProduct() != null) // product-group rows aren't a simple per-product override
                 .collect(Collectors.groupingBy(bp -> bp.getProduct().getId()));
 
         Map<String, BigDecimal> result = new LinkedHashMap<>();
@@ -82,14 +83,18 @@ public class PricingController {
     }
 
     /**
-     * Product IDs with any active batch price visible to this customer (general
-     * or customer-specific). Used by mobile to bulk-check, for a whole product
-     * list, which products should hide their plain default price in favor of
+     * Product IDs with any active batch price visible to this customer (general,
+     * customer-specific, or reachable via a product/customer group). Used by mobile to bulk-check,
+     * for a whole product list, which products should hide their plain default price in favor of
      * "select qty to see price" (their real price depends on the batch tier).
      */
     @GetMapping("/batch-product-ids")
     public List<UUID> batchProductIds(@RequestParam UUID customerId) {
-        return batchPriceRepo.findActiveProductIdsVisibleToCustomer(customerId, LocalDate.now());
+        LocalDate today = LocalDate.now();
+        java.util.Set<UUID> ids = new java.util.LinkedHashSet<>(
+                batchPriceRepo.findActiveDirectProductIdsVisibleToCustomer(customerId, today));
+        ids.addAll(batchPriceRepo.findActiveGroupProductIdsVisibleToCustomer(customerId, today));
+        return List.copyOf(ids);
     }
 
     /**

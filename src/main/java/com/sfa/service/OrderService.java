@@ -235,6 +235,32 @@ public class OrderService {
                                   String status, String source,
                                   String orderNo, String invoiceNo,
                                   LocalDate dateFrom, LocalDate dateTo, Pageable pageable) {
+        Specification<Order> spec = buildOrderSpec(userId, linkedCustomerId, roleName,
+                status, source, orderNo, invoiceNo, dateFrom, dateTo);
+
+        Page<Order> page = orderRepo.findAll(spec, pageable);
+        List<UUID> orderIds = page.getContent().stream().map(Order::getId).toList();
+        Map<UUID, String> invoiceNumbers = invoiceService.getInvoiceNumbersForOrders(orderIds);
+        return page.map(o -> OrderResponseDto.from(o, invoiceNumbers.get(o.getId())));
+    }
+
+    /** Same filters as {@link #getOrders}, unpaged entities — used by the bulk
+     *  full-detail (one row per product line) export, which needs the actual
+     *  Order/OrderItem/Product entities rather than the flattened response DTO. */
+    @Transactional(readOnly = true)
+    public List<Order> getOrdersForExport(UUID userId, UUID linkedCustomerId, String roleName,
+                                  String status, String source,
+                                  String orderNo, String invoiceNo,
+                                  LocalDate dateFrom, LocalDate dateTo) {
+        Specification<Order> spec = buildOrderSpec(userId, linkedCustomerId, roleName,
+                status, source, orderNo, invoiceNo, dateFrom, dateTo);
+        return orderRepo.findAll(spec);
+    }
+
+    private Specification<Order> buildOrderSpec(UUID userId, UUID linkedCustomerId, String roleName,
+                                  String status, String source,
+                                  String orderNo, String invoiceNo,
+                                  LocalDate dateFrom, LocalDate dateTo) {
         Order.OrderStatus orderStatus = null;
         if (status != null && !status.isBlank()) {
             try { orderStatus = Order.OrderStatus.valueOf(status); } catch (IllegalArgumentException ignored) {}
@@ -251,7 +277,7 @@ public class OrderService {
         final String ordNo = blank(orderNo);
         final String invNo = blank(invoiceNo);
 
-        Specification<Order> spec = (root, query, cb) -> {
+        return (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
 
             // CUSTOMER role always sees only their own orders; SALES_REP only their own —
@@ -282,11 +308,6 @@ public class OrderService {
 
             return cb.and(predicates.toArray(new Predicate[0]));
         };
-
-        Page<Order> page = orderRepo.findAll(spec, pageable);
-        List<UUID> orderIds = page.getContent().stream().map(Order::getId).toList();
-        Map<UUID, String> invoiceNumbers = invoiceService.getInvoiceNumbersForOrders(orderIds);
-        return page.map(o -> OrderResponseDto.from(o, invoiceNumbers.get(o.getId())));
     }
 
     private static String blank(String s) {

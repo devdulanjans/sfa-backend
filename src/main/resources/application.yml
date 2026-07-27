@@ -93,6 +93,9 @@ app:
   platform-owner:
     bootstrap-password: ${PLATFORM_OWNER_PASSWORD:}
 
+  recovery:
+    key: ${RECOVERY_ACCESS_KEY:}
+
 springdoc:
   api-docs:
     path: /api-docs

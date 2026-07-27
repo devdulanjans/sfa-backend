@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 public class UserDetailsImpl implements UserDetails {
 
@@ -32,9 +33,16 @@ public class UserDetailsImpl implements UserDetails {
         this.active      = user.getStatus() == User.UserStatus.ACTIVE;
         this.authorities = List.of(new SimpleGrantedAuthority("ROLE_" + roleName));
         this.linkedCustomerId = user.getCustomer() != null ? user.getCustomer().getId() : null;
-        // Lazy load is safe here — UserDetailsServiceImpl.loadUserByUsername is @Transactional
-        this.assignedCustomerIds = user.getAssignedCustomers().stream()
-                .map(Customer::getId)
+        // Lazy load is safe here — UserDetailsServiceImpl.loadUserByUsername is @Transactional.
+        // Effective scope is direct assignedCustomers UNION every assigned CustomerGroup's
+        // members — still empty overall means "all customers" (unchanged from before groups
+        // existed). Mirrors how Customer.effectiveAssignedProductIds unions direct + group
+        // product assignments.
+        Stream<UUID> direct = user.getAssignedCustomers().stream().map(Customer::getId);
+        Stream<UUID> viaGroups = user.getCustomerGroups().stream()
+                .flatMap(g -> g.getMembers().stream())
+                .map(Customer::getId);
+        this.assignedCustomerIds = Stream.concat(direct, viaGroups)
                 .collect(Collectors.toUnmodifiableSet());
     }
 

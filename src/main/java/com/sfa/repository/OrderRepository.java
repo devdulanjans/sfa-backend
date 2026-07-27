@@ -37,6 +37,25 @@ public interface OrderRepository extends JpaRepository<Order, UUID>, JpaSpecific
     List<Order.OrderStatus> EXCLUDED_STATUSES =
             List.of(Order.OrderStatus.DRAFT, Order.OrderStatus.CANCELLED);
 
+    /** APPROVED and INVOICED both count as "achieved" toward a sales target — INVOICED is a
+     *  strictly later state of an already-approved order (see InvoiceService.generateInvoice),
+     *  so excluding it would undercount every order that went on to be invoiced. */
+    List<Order.OrderStatus> ACHIEVED_STATUSES =
+            List.of(Order.OrderStatus.APPROVED, Order.OrderStatus.INVOICED);
+
+    @Query("""
+        SELECT COALESCE(SUM(oi.quantity), 0) FROM OrderItem oi
+        WHERE oi.order.salesRep.id = :repId AND oi.product.id = :productId
+          AND oi.order.status IN :statuses
+          AND oi.order.approvedAt >= :from AND oi.order.approvedAt < :toExclusive
+        """)
+    BigDecimal sumAchievedQty(
+            @Param("repId") UUID repId,
+            @Param("productId") UUID productId,
+            @Param("statuses") Collection<Order.OrderStatus> statuses,
+            @Param("from") Instant from,
+            @Param("toExclusive") Instant toExclusive);
+
     @Query("""
         SELECT COUNT(o) FROM Order o
         WHERE o.salesRep.id = :repId

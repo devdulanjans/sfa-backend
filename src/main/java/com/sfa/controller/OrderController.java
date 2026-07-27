@@ -2,9 +2,12 @@ package com.sfa.controller;
 
 import com.sfa.dto.order.CreateOrderRequest;
 import com.sfa.dto.order.OrderResponseDto;
+import com.sfa.exception.BusinessException;
 import com.sfa.license.LicensedPackage;
 import com.sfa.license.RequiresLicense;
 import com.sfa.security.UserDetailsImpl;
+import com.sfa.service.DetailedExportGenerator;
+import com.sfa.service.OrderExportGenerator;
 import com.sfa.service.OrderService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -16,12 +19,15 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.io.IOException;
 import java.time.LocalDate;
 import java.util.UUID;
 
@@ -34,6 +40,8 @@ import java.util.UUID;
 public class OrderController {
 
     private final OrderService orderService;
+    private final OrderExportGenerator orderExportGenerator;
+    private final DetailedExportGenerator detailedExportGenerator;
 
     @GetMapping
     @Operation(summary = "List orders (customer sees own; sales rep sees own; manager/admin sees all)")
@@ -51,9 +59,83 @@ public class OrderController {
                         status, source, orderNo, invoiceNo, dateFrom, dateTo, pageable));
     }
 
+    @GetMapping("/export")
+    @Operation(summary = "Export orders matching the given filters")
+    public ResponseEntity<byte[]> export(
+            @AuthenticationPrincipal UserDetailsImpl user,
+            @RequestParam String format,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String source,
+            @RequestParam(required = false) String orderNo,
+            @RequestParam(required = false) String invoiceNo,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateFrom,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateTo) throws IOException {
+
+        var rows = orderService.getOrders(user.getId(), user.getLinkedCustomerId(), user.getRoleName(),
+                status, source, orderNo, invoiceNo, dateFrom, dateTo, Pageable.unpaged()).getContent();
+
+        byte[] bytes;
+        MediaType contentType;
+        String filename;
+
+        switch (format.toLowerCase()) {
+            case "xlsx" -> {
+                bytes = orderExportGenerator.generateExcel(rows);
+                contentType = MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+                filename = "orders.xlsx";
+            }
+            case "csv" -> {
+                bytes = orderExportGenerator.generateCsv(rows);
+                contentType = MediaType.parseMediaType("text/csv");
+                filename = "orders.csv";
+            }
+            case "pdf" -> {
+                bytes = orderExportGenerator.generatePdf(rows);
+                contentType = MediaType.APPLICATION_PDF;
+                filename = "orders.pdf";
+            }
+            default -> throw new BusinessException("Unsupported export format: " + format);
+        }
+
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                .contentType(contentType)
+                .body(bytes);
+    }
+
     @GetMapping("/{id}")
     public ResponseEntity<OrderResponseDto> get(@PathVariable UUID id) {
         return ResponseEntity.ok(OrderResponseDto.from(orderService.getOrder(id)));
+    }
+
+    @GetMapping("/{id}/export-details")
+    @Operation(summary = "Export this order's full detail (one row per product line) as Excel — for ERP import")
+    public ResponseEntity<byte[]> exportDetails(@PathVariable UUID id) throws IOException {
+        byte[] bytes = detailedExportGenerator.generateOrderExcel(orderService.getOrder(id));
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"order-details.xlsx\"")
+                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(bytes);
+    }
+
+    @GetMapping("/export-details")
+    @Operation(summary = "Bulk-export every order matching the given filters, full detail (one row per product line) — for ERP import")
+    public ResponseEntity<byte[]> exportDetailsBulk(
+            @AuthenticationPrincipal UserDetailsImpl user,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String source,
+            @RequestParam(required = false) String orderNo,
+            @RequestParam(required = false) String invoiceNo,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateFrom,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateTo) throws IOException {
+
+        var orders = orderService.getOrdersForExport(user.getId(), user.getLinkedCustomerId(), user.getRoleName(),
+                status, source, orderNo, invoiceNo, dateFrom, dateTo);
+        byte[] bytes = detailedExportGenerator.generateOrdersDetailExcel(orders);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"orders-details.xlsx\"")
+                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(bytes);
     }
 
     @PostMapping

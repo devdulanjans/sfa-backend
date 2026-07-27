@@ -26,12 +26,20 @@ public class BatchPrice {
     private UUID id;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "product_id", nullable = false)
+    @JoinColumn(name = "product_id")
     private Product product;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "customer_id")
     private Customer customer;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "customer_group_id")
+    private CustomerGroup customerGroup;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "product_group_id")
+    private ProductGroup productGroup;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "promotion_id")
