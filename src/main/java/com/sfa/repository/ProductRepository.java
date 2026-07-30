@@ -27,6 +27,15 @@ public interface ProductRepository extends JpaRepository<Product, UUID> {
     List<Product> findAssignedToCustomer(@Param("customerId") UUID customerId);
 
     @Query("""
+        SELECT DISTINCT p FROM CustomerGroup cg
+        JOIN cg.members m
+        JOIN cg.assignedProducts p
+        WHERE m.id = :customerId AND p.status = 'ACTIVE'
+        ORDER BY p.name
+    """)
+    List<Product> findAssignedToCustomerViaGroups(@Param("customerId") UUID customerId);
+
+    @Query("""
         SELECT p FROM Product p WHERE
         LOWER(p.name) LIKE LOWER(CONCAT('%', :query, '%')) OR
         LOWER(p.productCode) LIKE LOWER(CONCAT('%', :query, '%')) OR

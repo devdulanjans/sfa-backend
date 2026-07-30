@@ -19,8 +19,11 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -54,12 +57,14 @@ public class ProductService {
         // Assignment itself is the signal that restricts the catalog — not the
         // visibilityRule flag, which can drift out of sync with the actual
         // assignment list (e.g. products assigned without also flipping the
-        // flag). A customer with no assigned products always sees the full
-        // active catalog; any assignment narrows it to just those products.
-        List<Product> assigned = productRepository.findAssignedToCustomer(customerId);
+        // flag). A customer with no assigned products (directly or via a
+        // customer group they belong to) always sees the full active catalog;
+        // any assignment narrows it to just those products.
+        Set<Product> assigned = new LinkedHashSet<>(productRepository.findAssignedToCustomer(customerId));
+        assigned.addAll(productRepository.findAssignedToCustomerViaGroups(customerId));
         List<Product> products = assigned.isEmpty()
                 ? productRepository.findByStatusOrderByName(Product.ProductStatus.ACTIVE)
-                : assigned;
+                : assigned.stream().sorted(Comparator.comparing(Product::getName)).toList();
 
         return products.stream().map(ProductDto::from).toList();
     }
