@@ -26,6 +26,7 @@ public class MileageLogService {
 
     private final MileageLogRepository mileageLogRepo;
     private final UserRepository       userRepo;
+    private final SystemSettingService systemSettingService;
 
     /** Whether this user has an open session (needs end mileage before logout), or —
      *  if not — their last closed session's end mileage, shown as a reference on the
@@ -43,6 +44,7 @@ public class MileageLogService {
     }
 
     public MileageLogDto recordStart(UUID userId, BigDecimal startMileage) {
+        requireEnabled();
         if (mileageLogRepo.findByUserIdAndEndMileageIsNull(userId).isPresent()) {
             throw new BusinessException("You already have an open mileage session — record end mileage before starting a new one");
         }
@@ -62,6 +64,7 @@ public class MileageLogService {
     }
 
     public MileageLogDto recordEnd(UUID userId, BigDecimal endMileage) {
+        requireEnabled();
         MileageLog log = mileageLogRepo.findByUserIdAndEndMileageIsNull(userId)
                 .orElseThrow(() -> new BusinessException("Record start mileage before end mileage"));
         if (endMileage == null || endMileage.compareTo(log.getStartMileage()) < 0) {
@@ -76,5 +79,11 @@ public class MileageLogService {
     @Transactional(readOnly = true)
     public Page<MileageLogDto> getReport(UUID userId, LocalDate dateFrom, LocalDate dateTo, Pageable pageable) {
         return mileageLogRepo.findLogs(userId, dateFrom, dateTo, pageable).map(MileageLogDto::from);
+    }
+
+    private void requireEnabled() {
+        if (!systemSettingService.isMileageManagementEnabled()) {
+            throw new BusinessException("Mileage management is disabled");
+        }
     }
 }

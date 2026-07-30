@@ -24,5 +24,6 @@ public record CreateCustomerRequest(
         BigDecimal creditLimit,
         Integer creditDays,
         String source,
-        @NotEmpty @Valid List<AddressRequest> addresses
+        @NotEmpty @Valid List<AddressRequest> addresses,
+        java.util.UUID parentCustomerId
 ) {}

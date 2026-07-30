@@ -2,6 +2,7 @@ package com.sfa.controller;
 
 import com.sfa.dto.customer.CreateCustomerRequest;
 import com.sfa.dto.customer.CustomerAnalyticsDto;
+import com.sfa.dto.customer.CustomerBranchSummaryDto;
 import com.sfa.dto.customer.CustomerDto;
 import com.sfa.dto.customer.CustomerImportResultDto;
 import com.sfa.dto.customer.QuickCreateCustomerRequest;
@@ -61,11 +62,30 @@ public class CustomerController {
             @AuthenticationPrincipal UserDetailsImpl user,
             @RequestParam(defaultValue = "") String search,
             @RequestParam(defaultValue = "false") boolean includeDeleted,
+            @RequestParam(defaultValue = "false") boolean topLevelOnly,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
         Set<UUID> restricted = restrictedIds(user);
         boolean effectiveIncludeDeleted = includeDeleted && user != null && Role.SUPER_ADMIN.equals(user.getRoleName());
-        return customerService.list(search, restricted, effectiveIncludeDeleted, PageRequest.of(page, size, Sort.by("name")));
+        return customerService.list(search, restricted, effectiveIncludeDeleted, topLevelOnly, PageRequest.of(page, size, Sort.by("name")));
+    }
+
+    @GetMapping("/{id}/branches")
+    public Page<CustomerDto> branches(
+            @AuthenticationPrincipal UserDetailsImpl user,
+            @PathVariable UUID id,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        checkAccess(user, id);
+        return customerService.listBranches(id, PageRequest.of(page, size, Sort.by("name")));
+    }
+
+    @GetMapping("/{id}/branch-summary")
+    public CustomerBranchSummaryDto branchSummary(
+            @AuthenticationPrincipal UserDetailsImpl user,
+            @PathVariable UUID id) {
+        checkAccess(user, id);
+        return customerService.getBranchSummary(id);
     }
 
     @GetMapping("/export")
@@ -75,7 +95,7 @@ public class CustomerController {
             @RequestParam String format,
             @RequestParam(defaultValue = "") String search) throws IOException {
         Set<UUID> restricted = restrictedIds(user);
-        List<CustomerDto> rows = customerService.list(search, restricted, false, Pageable.unpaged()).getContent();
+        List<CustomerDto> rows = customerService.list(search, restricted, false, false, Pageable.unpaged()).getContent();
 
         byte[] bytes;
         MediaType contentType;

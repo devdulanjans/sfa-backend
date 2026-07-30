@@ -47,6 +47,10 @@ public class Damage {
     @Column(name = "damage_date")
     private Instant damageDate;
 
+    @Column(name = "print_count")
+    @Builder.Default
+    private Integer printCount = 0;
+
     @CreatedDate
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -54,6 +58,10 @@ public class Damage {
     @LastModifiedDate
     @Column(name = "updated_at")
     private Instant updatedAt;
+
+    public void incrementPrintCount() {
+        this.printCount = (this.printCount == null ? 0 : this.printCount) + 1;
+    }
 
     public enum DamageStatus { PENDING, APPROVED, REJECTED, PROCESSED }
 }

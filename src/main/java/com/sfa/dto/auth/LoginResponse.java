@@ -16,5 +16,6 @@ public record LoginResponse(
     List<DistributorDto> distributors,
     List<String> permissions,
     boolean sfaEnabled,
-    boolean posEnabled
+    boolean posEnabled,
+    boolean financeEnabled
 ) {}

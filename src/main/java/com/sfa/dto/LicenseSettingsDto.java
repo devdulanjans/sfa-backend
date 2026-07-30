@@ -9,6 +9,7 @@ public record LicenseSettingsDto(
         UUID id,
         boolean sfaEnabled,
         boolean posEnabled,
+        boolean financeEnabled,
         String clientName,
         String note,
         Instant updatedAt
@@ -18,6 +19,7 @@ public record LicenseSettingsDto(
                 s.getId(),
                 s.isSfaEnabled(),
                 s.isPosEnabled(),
+                s.isFinanceEnabled(),
                 s.getClientName(),
                 s.getNote(),
                 s.getUpdatedAt()

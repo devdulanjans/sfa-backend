@@ -69,6 +69,10 @@ public class Invoice {
     @Builder.Default
     private InvoiceStatus status = InvoiceStatus.ISSUED;
 
+    @Column(name = "paid_amount", nullable = false, precision = 14, scale = 2)
+    @Builder.Default
+    private BigDecimal paidAmount = BigDecimal.ZERO;
+
     @CreatedDate
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -80,5 +84,5 @@ public class Invoice {
         this.printCount = (this.printCount == null ? 0 : this.printCount) + 1;
     }
 
-    public enum InvoiceStatus { DRAFT, ISSUED, PAID, CANCELLED }
+    public enum InvoiceStatus { DRAFT, ISSUED, PARTIALLY_PAID, PAID, CANCELLED }
 }

@@ -97,6 +97,7 @@ public class OrderService {
                 .deliveryAddressLine(request.deliveryAddressLine())
                 .customerSignature(request.customerSignature())
                 .salespersonSignature(request.salespersonSignature())
+                .poNumber(request.poNumber())
                 .build();
 
         Map<UUID, BigDecimal> purchasedQty = new java.util.LinkedHashMap<>();

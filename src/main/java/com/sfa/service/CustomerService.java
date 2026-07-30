@@ -3,6 +3,7 @@ package com.sfa.service;
 import com.sfa.dto.customer.AddressRequest;
 import com.sfa.dto.customer.CreateCustomerRequest;
 import com.sfa.dto.customer.CustomerAnalyticsDto;
+import com.sfa.dto.customer.CustomerBranchSummaryDto;
 import com.sfa.dto.customer.CustomerDto;
 import com.sfa.dto.customer.QuickCreateCustomerRequest;
 import com.sfa.dto.product.ProductDto;
@@ -53,15 +54,38 @@ public class CustomerService {
     /**
      * @param restrictedIds non-null non-empty → only return customers in that set;
      *                      null or empty → return all customers
+     * @param topLevelOnly  excludes branches (customers with a parentCustomer) — callers should
+     *                      only pass true when search is blank, so a branch is still directly
+     *                      findable by name/code once the user actually searches for it
      */
-    public Page<CustomerDto> list(String search, Set<UUID> restrictedIds, boolean includeDeleted, Pageable pageable) {
+    public Page<CustomerDto> list(String search, Set<UUID> restrictedIds, boolean includeDeleted, boolean topLevelOnly, Pageable pageable) {
         String q = search == null ? "" : search;
         Page<Customer> page = (restrictedIds != null && !restrictedIds.isEmpty())
-                ? customerRepository.searchWithinIds(q, includeDeleted, restrictedIds, pageable)
-                : customerRepository.search(q, includeDeleted, pageable);
+                ? customerRepository.searchWithinIds(q, includeDeleted, topLevelOnly, restrictedIds, pageable)
+                : customerRepository.search(q, includeDeleted, topLevelOnly, pageable);
 
         List<CustomerDto> dtos = toDtos(page.getContent());
         return new org.springframework.data.domain.PageImpl<>(dtos, pageable, page.getTotalElements());
+    }
+
+    @Transactional(readOnly = true)
+    public Page<CustomerDto> listBranches(UUID parentId, Pageable pageable) {
+        findOrThrow(parentId); // 404s cleanly if the parent doesn't exist
+        Page<Customer> page = customerRepository.findByParentCustomerId(parentId, pageable);
+        List<CustomerDto> dtos = toDtos(page.getContent());
+        return new org.springframework.data.domain.PageImpl<>(dtos, pageable, page.getTotalElements());
+    }
+
+    @Transactional(readOnly = true)
+    public CustomerBranchSummaryDto getBranchSummary(UUID parentId) {
+        findOrThrow(parentId);
+        long branchCount = customerRepository.countBranchesForCustomers(List.of(parentId)).stream()
+                .filter(row -> row.getParentId().equals(parentId))
+                .findFirst()
+                .map(CustomerRepository.BranchCountRow::getCount)
+                .orElse(0L);
+        BigDecimal totalOutstanding = customerRepository.sumOutstandingForParentAndBranches(parentId);
+        return new CustomerBranchSummaryDto((int) branchCount, totalOutstanding);
     }
 
     public CustomerDto getById(UUID id) {
@@ -96,11 +120,33 @@ public class CustomerService {
             }
         }
 
+        // branchCount: one grouped query for however many of these customers are parents.
+        Map<UUID, Long> branchCountByParent = new java.util.HashMap<>();
+        if (!customerIds.isEmpty()) {
+            for (var row : customerRepository.countBranchesForCustomers(customerIds)) {
+                branchCountByParent.put(row.getParentId(), row.getCount());
+            }
+        }
+
+        // parentCustomerName: getId() on a lazy proxy is safe (see CustomerDto.from), but the
+        // name requires actually loading the parent — one bulk findAllById rather than N+1.
+        List<UUID> parentIds = customers.stream()
+                .map(c -> c.getParentCustomer() != null ? c.getParentCustomer().getId() : null)
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .toList();
+        Map<UUID, String> parentNameById = parentIds.isEmpty() ? Map.of()
+                : customerRepository.findAllById(parentIds).stream()
+                        .collect(java.util.stream.Collectors.toMap(Customer::getId, Customer::getName));
+
         return customers.stream().map(c -> {
             List<UUID> direct = directByCustomer.getOrDefault(c.getId(), List.of());
             java.util.Set<UUID> effective = new java.util.LinkedHashSet<>(direct);
             effective.addAll(groupByCustomer.getOrDefault(c.getId(), List.of()));
-            return CustomerDto.from(c, direct, List.copyOf(effective));
+            UUID parentId = c.getParentCustomer() != null ? c.getParentCustomer().getId() : null;
+            String parentName = parentId != null ? parentNameById.get(parentId) : null;
+            int branchCount = branchCountByParent.getOrDefault(c.getId(), 0L).intValue();
+            return CustomerDto.from(c, direct, List.copyOf(effective), parentName, branchCount);
         }).toList();
     }
 
@@ -217,6 +263,25 @@ public class CustomerService {
         c.setCreditDays(req.creditDays());
         if (req.source() != null) {
             c.setSource(Customer.CustomerSource.valueOf(req.source()));
+        }
+
+        // Single-level branch hierarchy: a branch can never itself become a parent, and a
+        // parent (has its own branches) can never become someone else's branch.
+        if (req.parentCustomerId() != null) {
+            Customer parent = customerRepository.findById(req.parentCustomerId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Customer", req.parentCustomerId()));
+            if (c.getId() != null && parent.getId().equals(c.getId())) {
+                throw new BusinessException("A customer cannot be its own parent");
+            }
+            if (parent.getParentCustomer() != null) {
+                throw new BusinessException("'" + parent.getName() + "' is itself a branch and cannot have branches of its own");
+            }
+            if (c.getId() != null && customerRepository.existsByParentCustomerId(c.getId())) {
+                throw new BusinessException("This customer already has branches and cannot become a branch itself");
+            }
+            c.setParentCustomer(parent);
+        } else {
+            c.setParentCustomer(null);
         }
     }
 

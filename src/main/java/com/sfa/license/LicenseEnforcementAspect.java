@@ -37,6 +37,7 @@ public class LicenseEnforcementAspect {
         boolean enabled = switch (annotation.value()) {
             case SFA -> licenseService.isSfaEnabled();
             case POS -> licenseService.isPosEnabled();
+            case FINANCE -> licenseService.isFinanceEnabled();
         };
         if (!enabled) {
             throw new LicenseDeniedException(annotation.value());

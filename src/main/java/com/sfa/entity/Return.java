@@ -51,6 +51,10 @@ public class Return {
     @Column(name = "return_date")
     private Instant returnDate;
 
+    @Column(name = "print_count")
+    @Builder.Default
+    private Integer printCount = 0;
+
     @CreatedDate
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -58,6 +62,10 @@ public class Return {
     @LastModifiedDate
     @Column(name = "updated_at")
     private Instant updatedAt;
+
+    public void incrementPrintCount() {
+        this.printCount = (this.printCount == null ? 0 : this.printCount) + 1;
+    }
 
     public enum ReturnStatus { PENDING, APPROVED, REJECTED, PROCESSED }
 }

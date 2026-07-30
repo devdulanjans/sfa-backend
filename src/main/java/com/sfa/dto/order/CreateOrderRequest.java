@@ -16,5 +16,6 @@ public record CreateOrderRequest(
     String deliveryAddressLabel,
     String deliveryAddressLine,
     String customerSignature,
-    String salespersonSignature
+    String salespersonSignature,
+    String poNumber
 ) {}

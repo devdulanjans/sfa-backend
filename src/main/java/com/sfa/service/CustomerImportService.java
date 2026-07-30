@@ -4,6 +4,7 @@ import com.sfa.dto.customer.AddressRequest;
 import com.sfa.dto.customer.CreateCustomerRequest;
 import com.sfa.dto.customer.CustomerImportResultDto;
 import com.sfa.dto.customer.CustomerImportRowResult;
+import com.sfa.repository.CustomerRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
@@ -19,6 +20,7 @@ import java.io.InputStream;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -27,7 +29,7 @@ public class CustomerImportService {
     private static final String[] HEADERS = {
             "Customer Code", "Customer Name*", "Contact Person", "Phone", "Email",
             "Address Label", "Address*", "Tax Number", "Tax Type", "Credit Limit",
-            "Credit Days", "Visibility Rule", "Location", "Place of Supplier"
+            "Credit Days", "Visibility Rule", "Location", "Place of Supplier", "Parent Customer Code"
     };
 
     private static final String[] TAX_TYPES        = {"STANDARD", "EXEMPT", "ZERO_RATED"};
@@ -35,6 +37,7 @@ public class CustomerImportService {
     private static final int MAX_TEMPLATE_ROWS = 3000;
 
     private final CustomerService customerService;
+    private final CustomerRepository customerRepository;
 
     @PersistenceContext
     private EntityManager em;
@@ -106,6 +109,7 @@ public class CustomerImportService {
                 {"Visibility Rule", "No", "One of: ALL, ASSIGNED. Defaults to ALL."},
                 {"Location", "No", "e.g. Colombo"},
                 {"Place of Supplier", "No", "e.g. KEELLS - Anuradhapura"},
+                {"Parent Customer Code", "No", "Must match an existing customer's Customer Code exactly. Leave blank for a standalone/head-office customer. If the parent is new too, put its row before its branch rows in this same file."},
                 {"", "", ""},
                 {"Do not modify the header row on the \"Customers\" sheet. One row = one customer.", "", ""},
                 {"Save the file as .xlsx before uploading it back.", "", ""},
@@ -152,6 +156,7 @@ public class CustomerImportService {
                     String visibilityRule = cellToString(row.getCell(11));
                     String location       = cellToString(row.getCell(12));
                     String placeOfSupplier = cellToString(row.getCell(13));
+                    String parentCode     = cellToString(row.getCell(14));
 
                     boolean rowIsBlank = isBlank(name) && isBlank(addressLine) && isBlank(customerCode)
                             && isBlank(phone) && isBlank(email);
@@ -173,11 +178,20 @@ public class CustomerImportService {
                     BigDecimal creditLimit = parseDecimal(creditLimitStr, "Credit Limit");
                     Integer creditDays = parseInt(creditDaysStr, "Credit Days");
 
+                    UUID parentCustomerId = null;
+                    if (!isBlank(parentCode)) {
+                        parentCustomerId = customerRepository.findByCustomerCode(parentCode.trim())
+                                .orElseThrow(() -> new IllegalArgumentException(
+                                        "Parent Customer Code not found: \"" + parentCode.trim() + "\""))
+                                .getId();
+                    }
+
                     CreateCustomerRequest req = new CreateCustomerRequest(
                             code, name.trim(), blankToNull(contactPerson), blankToNull(phone), blankToNull(email),
                             blankToNull(location), blankToNull(placeOfSupplier), blankToNull(taxNumber), resolvedTaxType, null, null, resolvedVisibility,
                             creditLimit, creditDays, null,
-                            List.of(new AddressRequest(label, addressLine.trim())));
+                            List.of(new AddressRequest(label, addressLine.trim())),
+                            parentCustomerId);
 
                     customerService.create(req);
                     successCount++;

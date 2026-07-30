@@ -22,6 +22,7 @@ import com.sfa.entity.Customer;
 import com.sfa.entity.Invoice;
 import com.sfa.entity.Order;
 import com.sfa.entity.OrderItem;
+import com.sfa.entity.User;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -176,9 +177,17 @@ public class InvoicePdfGenerator {
                 .setBorderLeft(outer).setBorderRight(outer).setBorderBottom(div).setPadding(0));
 
         // ── 4. SUPPLIER | PURCHASER ──────────────────────────────────────────
+        // Billed name/address is the head office's when the customer is a branch
+        // (has a parentCustomer) — TIN/phone/Place of Supply stay the branch's own,
+        // since those legitimately identify this specific branch/outlet. Place of
+        // Supply sits with the purchaser (after Contact No), not the supplier —
+        // it identifies which branch/outlet this invoice is for, so it belongs
+        // next to the customer's own contact info. Placeholder "0000000000" phone
+        // numbers from bulk-imported data print as blank rather than the literal digits.
+        Customer billingParty = billingParty(invoice.getCustomer());
         String custTin     = safe(invoice.getCustomer().getTaxNumber(), "N/A");
-        String custAddress = safe(primaryAddressLine(invoice.getCustomer()), "—");
-        String custPhone   = safe(invoice.getCustomer().getPhone(), "—");
+        String custAddress = safe(primaryAddressLine(billingParty), "—");
+        String custPhone   = displayPhone(invoice.getCustomer().getPhone());
 
         Table parties = new Table(UnitValue.createPercentArray(new float[]{50, 50}))
                 .setWidth(UnitValue.createPercentValue(100)).setBorder(Border.NO_BORDER);
@@ -189,14 +198,14 @@ public class InvoicePdfGenerator {
                 .add(kvRow("Reg. Address :",        safe(profile.registeredAddress(), "—"), bold, regular))
                 .add(kvRow("Operating Address :",   safe(profile.operatingAddress(), "—"),  bold, regular))
                 .add(kvRow("Contact No / Fax No :", safe(profile.phone(), "—"),             bold, regular))
-                .add(kvRow("Place of Supply :",     safe(invoice.getCustomer().getPlaceOfSupplier(), dots(25)), bold, regular))
                 .setBorder(Border.NO_BORDER).setBorderRight(div).setPadding(8));
 
         parties.addCell(new Cell()
-                .add(kvRow("Purchaser's TIN :",  custTin,                           bold, regular))
-                .add(kvRow("Purchaser's Name :", invoice.getCustomer().getName(),   bold, regular))
-                .add(kvRow("Address :",          custAddress,                       bold, regular))
-                .add(kvRow("Contact No :",       custPhone,                         bold, regular))
+                .add(kvRow("Purchaser's TIN :",  custTin,                bold, regular))
+                .add(kvRow("Purchaser's Name :", billingParty.getName(), bold, regular))
+                .add(kvRow("Address :",          custAddress,            bold, regular))
+                .add(kvRow("Contact No :",       custPhone,              bold, regular))
+                .add(kvRow("Place of Supply :",  safe(invoice.getCustomer().getPlaceOfSupplier(), dots(25)), bold, regular))
                 .setBorder(Border.NO_BORDER).setPadding(8));
 
         frame.addCell(new Cell().add(parties).setBorder(Border.NO_BORDER)
@@ -204,7 +213,7 @@ public class InvoicePdfGenerator {
 
         // ── 5. PURCHASE ORDER NO ──────────────────────────────────────────────
         frame.addCell(new Cell()
-                .add(kvRow("Purchase Order No :", dots(20), bold, regular))
+                .add(kvRow("Purchase Order No :", safe(order.getPoNumber(), dots(20)), bold, regular))
                 .add(kvRow("Date :",               dots(20), bold, regular))
                 .setBorder(Border.NO_BORDER)
                 .setBorderLeft(outer).setBorderRight(outer).setBorderBottom(div).setPadding(8));
@@ -343,6 +352,10 @@ public class InvoicePdfGenerator {
         addSignatureBlock(repSigCell, order.getSalespersonSignature(), regular);
         repSigCell.add(new Paragraph("Sales Rep Signature")
                 .setFont(regular).setFontSize(7).setFontColor(ColorConstants.GRAY));
+        String repName = repName(order);
+        if (repName != null) {
+            repSigCell.add(new Paragraph(repName).setFont(bold).setFontSize(8).setMarginTop(1));
+        }
         sigs.addCell(repSigCell);
 
         frame.addCell(new Cell().add(sigs).setBorder(Border.NO_BORDER)
@@ -433,18 +446,25 @@ public class InvoicePdfGenerator {
         txt(buf, wrapLabeledField("Reg. Address      : ", safe(profile.registeredAddress(), "—"), W));
         txt(buf, wrapLabeledField("Operating Address : ", safe(profile.operatingAddress(), "—"), W));
         txt(buf, "Contact No/Fax No : " + safe(profile.phone(), "—") + "\n");
-        txt(buf, "Place of Supply   : " + safe(invoice.getCustomer().getPlaceOfSupplier(), dots(20)) + "\n");
         txt(buf, "-".repeat(W) + "\n\n");
 
         // ── Purchaser block ───────────────────────────────────────────────────
+        // Billed name/address is the head office's when the customer is a branch —
+        // see the matching comment in generate() above for why TIN/Place of Supply
+        // are deliberately left as the branch's own. Place of Supply sits after
+        // Contact No here (not with the supplier) since it identifies which
+        // branch/outlet this invoice is for. Placeholder "0000000000" phone
+        // numbers print as blank rather than the literal digits.
+        Customer billingParty = billingParty(invoice.getCustomer());
         txt(buf, "Purchaser's TIN   : " + safe(invoice.getCustomer().getTaxNumber(), "N/A") + "\n");
-        txt(buf, "Purchaser's Name  : " + trunc(invoice.getCustomer().getName(), ADDR_WIDTH) + "\n");
-        txt(buf, "Address           : " + trunc(safe(primaryAddressLine(invoice.getCustomer()), "—"), ADDR_WIDTH) + "\n");
-        txt(buf, "Contact No        : " + safe(invoice.getCustomer().getPhone(), "—") + "\n");
+        txt(buf, "Purchaser's Name  : " + trunc(billingParty.getName(), ADDR_WIDTH) + "\n");
+        txt(buf, "Address           : " + trunc(safe(primaryAddressLine(billingParty), "—"), ADDR_WIDTH) + "\n");
+        txt(buf, "Contact No        : " + displayPhone(invoice.getCustomer().getPhone()) + "\n");
+        txt(buf, "Place of Supply   : " + safe(invoice.getCustomer().getPlaceOfSupplier(), dots(20)) + "\n");
         txt(buf, "=".repeat(W) + "\n\n");
 
-        // ── Purchase Order No (blank, filled by hand) ────────────────────────
-        txt(buf, "Purchase Order No : " + dots(15) + " Date : " + dots(8) + "\n");
+        // ── Purchase Order No — printed when the rep entered one, else blank dots ──
+        txt(buf, "Purchase Order No : " + safe(order.getPoNumber(), dots(15)) + " Date : " + dots(8) + "\n");
         txt(buf, "=".repeat(W) + "\n\n");
 
         // ── Delivery date ─────────────────────────────────────────────────────
@@ -452,8 +472,10 @@ public class InvoicePdfGenerator {
         txt(buf, "=".repeat(W) + "\n\n");
 
         // ── Items — must never wrap to a second line ─────────────────────────
-        // No(2) + " " + Name(24) + " " + Qty(6) + " " + UnitPr(11) + " " + Amt(11) = 58 (<= 64)
-        txt(buf, pR("No", 2) + " " + pR("Description", 24) + " " + pL("Qty", 6) + " " + pL("Price", 11) + " " + pL("Amount", 11) + "\n");
+        // No(2) + " " + Name(24) + " " + Qty(6) + " " + UnitPr(11) + " " + Amt(17) = 64 (== W),
+        // so the Amount column's right edge lines up exactly with the totals section below
+        // (lw=46/rw=18 there also sums to 64) instead of ending 6 chars short of it.
+        txt(buf, pR("No", 2) + " " + pR("Description", 24) + " " + pL("Qty", 6) + " " + pL("Price", 11) + " " + pL("Amount", 17) + "\n");
         txt(buf, "-".repeat(W) + "\n");
 
         int no = 1;
@@ -471,7 +493,7 @@ public class InvoicePdfGenerator {
                     : item.getLineTotal().subtract(item.getTaxAmount());
             String up   = fmtAmount(displayUnitPrice);
             String amt  = fmtAmount(amountExclVat);
-            txt(buf, pR(String.valueOf(no++), 2) + " " + pR(name, 24) + " " + pL(qty, 6) + " " + pL(up, 11) + " " + pL(amt, 11) + "\n");
+            txt(buf, pR(String.valueOf(no++), 2) + " " + pR(name, 24) + " " + pL(qty, 6) + " " + pL(up, 11) + " " + pL(amt, 17) + "\n");
             if (isFree && item.getPromotionName() != null) {
                 txt(buf, "   " + trunc(item.getPromotionName(), W - 3) + "\n");
             } else {
@@ -520,11 +542,241 @@ public class InvoicePdfGenerator {
         txt(buf, "Customer Name / NIC No. & Sign\n\n");
         printSignatureEscPos(buf, order.getSalespersonSignature(), SIGNATURE_WIDTH_PX);
         txt(buf, "Sales Rep Signature\n");
+        String repNameEsc = repName(order);
+        if (repNameEsc != null) {
+            esc(buf, 0x1B, 0x45, 0x01); // bold on
+            txt(buf, trunc(repNameEsc, W) + "\n");
+            esc(buf, 0x1B, 0x45, 0x00); // bold off
+        }
 
         // Feed + partial cut
         txt(buf, "\n\n\n\n");
         esc(buf, 0x1D, 0x56, 0x42, 0x03);
         return buf.toByteArray();
+    }
+
+    // ── TEMPORARY — dev/QA aid, remove before production ────────────────────
+    // Thermal receipt preview (narrow PDF mirroring generateEscPos's exact
+    // content/layout) — lets the mobile app show what will actually print on
+    // the Bluetooth thermal printer, instead of the unrelated A4 tax-invoice
+    // design. Reuses the same line content/order/padding (pR/pL/trunc/
+    // wrapLabeledField/amountInWords/billingParty) as generateEscPos() so the
+    // two can't silently drift apart — only the renderer differs (monospace
+    // PDF text instead of raw ESC/POS bytes).
+    // Remove this whole block (through addReceiptSignature below) plus the
+    // matching TEMPORARY markers in InvoiceController/InvoiceService and
+    // sfa-mobile's InvoicePrintPreviewScreen before shipping to production.
+
+    // Courier is exactly 0.6em per character, so 64 chars at RECEIPT_FONT_SZ need
+    // 64 * 0.6 * RECEIPT_FONT_SZ = 249.6pt of content width. RECEIPT_WIDTH must leave
+    // at least that much after margins — the "=".repeat(64)/"-".repeat(64) divider
+    // lines have no spaces to wrap on, so an overly-tight width here isn't just a
+    // cosmetic overflow, it's unlayoutable and throws at PDF-generation time.
+    private static final float RECEIPT_WIDTH   = 280f; // ~99mm — narrow "receipt" page
+    private static final float RECEIPT_MARGIN  = 8f;
+    private static final float RECEIPT_FONT_SZ = 6.5f; // fits the same 64-char width as generateEscPos's W
+
+    public byte[] generateThermalPreview(Invoice invoice, Order order) throws IOException {
+        CompanyProfileDto profile = companyProfileService.get();
+        final int W = 64;
+
+        boolean isVatInvoice = invoice.getTaxTotal() != null
+                && invoice.getTaxTotal().compareTo(BigDecimal.ZERO) > 0;
+        String invoiceNoLabel = isVatInvoice ? "Tax Invoice No :" : "Invoice No :";
+        int pc = invoice.getPrintCount() == null ? 1 : invoice.getPrintCount();
+        String copyLabel = pc <= 1 ? "**  ORIGINAL  **" : "**  COPY " + (pc - 1) + "  **";
+        String invoiceTypeLabel = isVatInvoice ? "TAX INVOICE" : "INVOICE";
+
+        int itemCount = order.getItems().size();
+        float estimatedHeight = 900f + (itemCount * 20f) + 260f; // fixed content + items + logo/signatures
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        Document doc = new Document(new PdfDocument(new PdfWriter(out)),
+                new PageSize(RECEIPT_WIDTH, Math.max(900f, estimatedHeight)));
+        doc.setMargins(RECEIPT_MARGIN, RECEIPT_MARGIN, RECEIPT_MARGIN, RECEIPT_MARGIN);
+
+        PdfFont mono     = PdfFontFactory.createFont(StandardFonts.COURIER);
+        PdfFont monoBold = PdfFontFactory.createFont(StandardFonts.COURIER_BOLD);
+
+        // ── Header ────────────────────────────────────────────────────────────
+        byte[] logoBytes = fetchLogoBytes(profile);
+        if (logoBytes != null) {
+            try {
+                ImageData logoData = ImageDataFactory.create(logoBytes);
+                // Constrain by whichever dimension is tighter — a wide logo scaled only
+                // by height could overflow the narrow receipt width, which (like the
+                // divider lines above) has no way to wrap/break and would fail to lay out.
+                float scale = Math.min(28f / logoData.getHeight(), (RECEIPT_WIDTH - 2 * RECEIPT_MARGIN) / logoData.getWidth());
+                Image logo = new Image(logoData)
+                        .setWidth(logoData.getWidth() * scale)
+                        .setHeight(logoData.getHeight() * scale)
+                        .setHorizontalAlignment(com.itextpdf.layout.properties.HorizontalAlignment.CENTER);
+                doc.add(logo);
+            } catch (Exception e) {
+                log.warn("Could not decode logo for thermal preview: {}", e.toString());
+            }
+        }
+        doc.add(rLine(trunc(profile.companyName(), W), monoBold, RECEIPT_FONT_SZ + 1.5f, TextAlignment.CENTER));
+        doc.add(rLine("", mono));
+        doc.add(rLine("E-mail : " + safe(profile.email(), "—"), mono));
+        doc.add(rLine("", mono));
+        doc.add(rLine(copyLabel, monoBold, RECEIPT_FONT_SZ, TextAlignment.CENTER));
+        doc.add(new Paragraph(invoiceTypeLabel).setFont(monoBold).setFontSize(RECEIPT_FONT_SZ + 2)
+                .setFontColor(ColorConstants.WHITE).setBackgroundColor(ColorConstants.BLACK)
+                .setTextAlignment(TextAlignment.CENTER).setMultipliedLeading(1.1f).setMarginBottom(2));
+        doc.add(rLine("", mono));
+        doc.add(rLine("=".repeat(W), mono));
+        doc.add(rLine("", mono));
+
+        // ── Date of Invoice ───────────────────────────────────────────────────
+        doc.add(rLine("Date Of Invoice : " + fmtInstant(invoice.getCreatedAt()), mono));
+        doc.add(rLine("=".repeat(W), mono));
+        doc.add(rLine("", mono));
+
+        // ── Tax Invoice No / Invoice No ───────────────────────────────────────
+        doc.add(new Paragraph()
+                .add(new Text(invoiceNoLabel + " ").setFont(mono).setFontSize(RECEIPT_FONT_SZ))
+                .add(new Text(invoice.getInvoiceNumber()).setFont(monoBold).setFontSize(RECEIPT_FONT_SZ + 1.5f))
+                .setMultipliedLeading(1.1f).setMarginBottom(0));
+        doc.add(rLine("=".repeat(W), mono));
+        doc.add(rLine("", mono));
+
+        // ── Supplier block ────────────────────────────────────────────────────
+        doc.add(rLine("Supplier's TIN    : " + safe(stripTinSuffix(profile.taxId()), "N/A"), mono));
+        doc.add(rLine("Supplier's Name   : " + trunc(profile.companyName(), 43), mono));
+        doc.add(rWrapped("Reg. Address      : ", safe(profile.registeredAddress(), "—"), W, mono));
+        doc.add(rWrapped("Operating Address : ", safe(profile.operatingAddress(), "—"), W, mono));
+        doc.add(rLine("Contact No/Fax No : " + safe(profile.phone(), "—"), mono));
+        doc.add(rLine("-".repeat(W), mono));
+        doc.add(rLine("", mono));
+
+        // ── Purchaser block — billingParty resolves to head office when the
+        //    customer is a branch, exactly as generateEscPos/generate do. Place
+        //    of Supply sits after Contact No (identifies the branch/outlet);
+        //    placeholder "0000000000" phone numbers print blank. ─────────────
+        Customer billingParty = billingParty(invoice.getCustomer());
+        doc.add(rLine("Purchaser's TIN   : " + safe(invoice.getCustomer().getTaxNumber(), "N/A"), mono));
+        doc.add(rLine("Purchaser's Name  : " + trunc(billingParty.getName(), 43), mono));
+        doc.add(rLine("Address           : " + trunc(safe(primaryAddressLine(billingParty), "—"), 43), mono));
+        doc.add(rLine("Contact No        : " + displayPhone(invoice.getCustomer().getPhone()), mono));
+        doc.add(rLine("Place of Supply   : " + safe(invoice.getCustomer().getPlaceOfSupplier(), dots(20)), mono));
+        doc.add(rLine("=".repeat(W), mono));
+        doc.add(rLine("", mono));
+
+        // ── Purchase Order No / Delivery Date — printed when the rep entered one ──
+        doc.add(rLine("Purchase Order No : " + safe(order.getPoNumber(), dots(15)) + " Date : " + dots(8), mono));
+        doc.add(rLine("=".repeat(W), mono));
+        doc.add(rLine("", mono));
+        doc.add(rLine("Delivery Date     : " + (order.getOrderDate() != null ? fmtInstant(order.getOrderDate()) : "—"), mono));
+        doc.add(rLine("=".repeat(W), mono));
+        doc.add(rLine("", mono));
+
+        // ── Items ─────────────────────────────────────────────────────────────
+        doc.add(rLine(pR("No", 2) + " " + pR("Description", 24) + " " + pL("Qty", 6) + " " + pL("Price", 11) + " " + pL("Amount", 17), monoBold));
+        doc.add(rLine("-".repeat(W), mono));
+
+        int no = 1;
+        for (OrderItem item : order.getItems()) {
+            boolean isFree = "FREE_PRODUCT".equals(item.getPriceSource());
+            String name = trunc(item.getProduct().getName() + (isFree ? " (FREE)" : ""), 24);
+            String qty  = trunc(item.getQuantity().toPlainString(), 6);
+            BigDecimal displayUnitPrice = (isFree && item.getUnitPrice().compareTo(BigDecimal.ZERO) == 0)
+                    ? item.getProduct().getDefaultPrice()
+                    : item.getUnitPrice();
+            BigDecimal amountExclVat = isFree
+                    ? displayUnitPrice.multiply(item.getQuantity())
+                    : item.getLineTotal().subtract(item.getTaxAmount());
+            String up  = fmtAmount(displayUnitPrice);
+            String amt = fmtAmount(amountExclVat);
+            doc.add(rLine(pR(String.valueOf(no++), 2) + " " + pR(name, 24) + " " + pL(qty, 6) + " " + pL(up, 11) + " " + pL(amt, 17), mono));
+            if (isFree && item.getPromotionName() != null) {
+                doc.add(rLine("   " + trunc(item.getPromotionName(), W - 3), mono));
+            }
+        }
+        doc.add(rLine("=".repeat(W), mono));
+        doc.add(rLine("", mono));
+
+        // ── Totals ────────────────────────────────────────────────────────────
+        int lw = 46, rw = W - lw;
+        BigDecimal discountTotal = invoice.getDiscountTotal() != null ? invoice.getDiscountTotal() : BigDecimal.ZERO;
+        boolean hasDiscount = discountTotal.compareTo(BigDecimal.ZERO) > 0;
+
+        doc.add(rLine(pR("Total Value of Supply", lw) + pL(fmtAmount(invoice.getSubtotal()), rw), mono));
+        if (hasDiscount) {
+            doc.add(rLine(pR("Discount", lw) + pL("(" + fmtAmount(discountTotal) + ")", rw), mono));
+            doc.add(rLine(pR("Net Amount", lw) + pL(fmtAmount(invoice.getSubtotal().subtract(discountTotal)), rw), mono));
+        }
+        doc.add(rLine(pR("VAT Amount (@ " + formatRate(effectiveTaxPct(invoice)) + "%)", lw) + pL(fmtAmount(invoice.getTaxTotal()), rw), mono));
+        doc.add(rLine(pR("Total Amount Including VAT", lw) + pL(fmtAmount(invoice.getTotal()), rw), monoBold, RECEIPT_FONT_SZ + 1f, TextAlignment.LEFT));
+        doc.add(rLine("=".repeat(W), mono));
+        doc.add(rLine("", mono));
+
+        doc.add(rWrapped("Total Amount in Words : ", amountInWords(invoice.getTotal()), W, mono));
+        doc.add(rLine("=".repeat(W), mono));
+        doc.add(rLine("", mono));
+
+        // ── Payment ───────────────────────────────────────────────────────────
+        doc.add(rLine("Mode of Payment : " + dots(20), mono));
+        doc.add(rLine("", mono));
+        doc.add(rLine("Payment Instructions:", mono));
+        doc.add(rLine("Cheque should be drawn in favor of", mono));
+        doc.add(rLine("\"" + trunc(profile.companyName(), W - 2) + "\"", mono));
+        doc.add(rLine("", mono));
+        doc.add(rLine("Payment      : [ ] Cash   [ ] Chq   [ ] Online", mono));
+        doc.add(rLine("Account Name : " + trunc(safe(profile.bankAccountName(), "—"), 45), mono));
+        doc.add(rLine("Account No.  : " + trunc(safe(profile.bankAccountNumber(), "—"), 45), mono));
+        doc.add(rLine("Bank Name    : " + trunc(safe(profile.bankName(), "—"), 45), mono));
+        doc.add(rLine("Branch Name  : " + trunc(safe(profile.bankBranch(), "—"), 45), mono));
+        doc.add(rLine("-".repeat(W), mono));
+        doc.add(rLine("", mono));
+
+        // ── Signatures ────────────────────────────────────────────────────────
+        doc.add(rLine("Received the goods in good condition", mono));
+        doc.add(rLine("", mono));
+        addReceiptSignature(doc, order.getCustomerSignature(), mono);
+        doc.add(rLine("Customer Name / NIC No. & Sign", mono));
+        doc.add(rLine("", mono));
+        addReceiptSignature(doc, order.getSalespersonSignature(), mono);
+        doc.add(rLine("Sales Rep Signature", mono));
+        String repNamePreview = repName(order);
+        if (repNamePreview != null) {
+            doc.add(rLine(trunc(repNamePreview, W), monoBold));
+        }
+
+        doc.close();
+        return out.toByteArray();
+    }
+
+    private Paragraph rLine(String text, PdfFont font) {
+        return rLine(text, font, RECEIPT_FONT_SZ, TextAlignment.LEFT);
+    }
+
+    private Paragraph rLine(String text, PdfFont font, float size, TextAlignment align) {
+        return new Paragraph(text).setFont(font).setFontSize(size)
+                .setTextAlignment(align).setMultipliedLeading(1.1f).setMarginBottom(0);
+    }
+
+    private Paragraph rWrapped(String label, String value, int totalWidth, PdfFont font) {
+        return new Paragraph(wrapLabeledField(label, value, totalWidth))
+                .setFont(font).setFontSize(RECEIPT_FONT_SZ).setMultipliedLeading(1.1f).setMarginBottom(0);
+    }
+
+    /** Real (not 1-bit rasterized) signature image for the receipt preview — a
+     *  crisp preview image is more useful here than replicating the printer's
+     *  actual dot-matrix dithering, which addSignatureBlock/printSignatureEscPos
+     *  already handle for the real PDF/thermal outputs. */
+    private void addReceiptSignature(Document doc, String base64Signature, PdfFont font) {
+        if (base64Signature != null && !base64Signature.isBlank()) {
+            try {
+                byte[] bytes = Base64.getDecoder().decode(base64Signature);
+                ImageData data = ImageDataFactory.create(bytes);
+                float scale = Math.min((RECEIPT_WIDTH - 2 * RECEIPT_MARGIN) / data.getWidth(), 60f / data.getHeight());
+                doc.add(new Image(data).setWidth(data.getWidth() * scale).setHeight(data.getHeight() * scale));
+                return;
+            } catch (Exception e) {
+                log.warn("Could not decode/render signature image for thermal preview: {}", e.toString());
+            }
+        }
+        doc.add(rLine(dots(30), font));
     }
 
     // ── PDF cell helpers ──────────────────────────────────────────────────────
@@ -548,8 +800,9 @@ public class InvoicePdfGenerator {
 
     /**
      * Blank dotted placeholder for fields the paper template leaves for the
-     * sales rep to fill in by hand (Place of Supply, Purchase Order No)
-     * — this system doesn't collect that data digitally.
+     * sales rep to fill in by hand — Place of Supply (never collected digitally),
+     * Purchase Order No when the rep left it blank (optional field, see
+     * order.getPoNumber()), and the invoice Date field.
      */
     private String dots(int n) {
         return ".".repeat(n);
@@ -637,10 +890,12 @@ public class InvoicePdfGenerator {
                 .add(new Paragraph(label).setFont(lf).setFontSize(8.5f)
                         .setTextAlignment(TextAlignment.RIGHT))
                 .setBorder(Border.NO_BORDER).setPaddingRight(8).setPaddingTop(3).setPaddingBottom(3));
+        // Right padding matches iCell's (3.5f, used by the items table's Amount column)
+        // so the totals values' right edge lines up exactly with the item amounts above.
         t.addCell(new Cell()
                 .add(new Paragraph(value).setFont(vf).setFontSize(8.5f)
                         .setTextAlignment(TextAlignment.RIGHT))
-                .setBorder(Border.NO_BORDER).setPaddingRight(8).setPaddingTop(3).setPaddingBottom(3));
+                .setBorder(Border.NO_BORDER).setPaddingRight(3.5f).setPaddingTop(3).setPaddingBottom(3));
     }
 
     // ── Amount in words ───────────────────────────────────────────────────────
@@ -801,6 +1056,34 @@ public class InvoicePdfGenerator {
         if (c == null) return null;
         var addrs = c.getAddresses();
         return addrs.isEmpty() ? null : addrs.get(0).getAddressLine();
+    }
+
+    /**
+     * The party billed on the invoice's Purchaser Name/Address — the head office's
+     * when the customer is a branch (has a parentCustomer), otherwise the customer
+     * itself unchanged. Only name/address switch; TIN, phone, and Place of Supply
+     * stay the branch's own since they legitimately identify this specific outlet.
+     */
+    private Customer billingParty(Customer customer) {
+        return customer.getParentCustomer() != null ? customer.getParentCustomer() : customer;
+    }
+
+    /**
+     * Bulk-imported/legacy customer data often carries a literal "0000000000"
+     * placeholder phone number rather than leaving it genuinely blank — printed
+     * as empty rather than the placeholder digits, same as a truly-missing phone.
+     */
+    private String displayPhone(String phone) {
+        if (phone == null || phone.isBlank() || "0000000000".equals(phone.trim())) return "";
+        return phone;
+    }
+
+    /** The sales rep's printable name for under their signature — full name, falling
+     *  back to username, matching the convention used elsewhere (e.g. InvoiceSummaryDto). */
+    private String repName(Order order) {
+        User rep = order.getSalesRep();
+        if (rep == null) return null;
+        return rep.getFullName() != null && !rep.getFullName().isBlank() ? rep.getFullName() : rep.getUsername();
     }
 
     private String safe(String s, String fallback) {

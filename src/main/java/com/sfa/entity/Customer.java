@@ -65,6 +65,12 @@ public class Customer {
     @JoinColumn(name = "category_id")
     private CustomerCategory category;
 
+    // Head-office/branch hierarchy — single level only (a customer that already has a
+    // parent can never itself become a parent; enforced in CustomerService, not here).
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "parent_customer_id")
+    private Customer parentCustomer;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "visibility_rule", nullable = false)
     @Builder.Default

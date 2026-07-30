@@ -39,6 +39,10 @@ public class LicenseService {
         return snapshot().isPosEnabled();
     }
 
+    public boolean isFinanceEnabled() {
+        return snapshot().isFinanceEnabled();
+    }
+
     @Transactional(readOnly = true)
     public LicenseSettingsDto get() {
         return LicenseSettingsDto.from(snapshot());
@@ -49,6 +53,7 @@ public class LicenseService {
         LicenseSettings s = getSingleton();
         s.setSfaEnabled(req.sfaEnabled());
         s.setPosEnabled(req.posEnabled());
+        s.setFinanceEnabled(req.financeEnabled());
         s.setClientName(req.clientName());
         s.setNote(req.note());
         s.setUpdatedBy(updatedBy);

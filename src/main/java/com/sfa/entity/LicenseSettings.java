@@ -26,6 +26,10 @@ public class LicenseSettings {
     @Builder.Default
     private boolean posEnabled = true;
 
+    @Column(name = "finance_enabled", nullable = false)
+    @Builder.Default
+    private boolean financeEnabled = false;
+
     @Column(name = "client_name", length = 200)
     private String clientName;
 

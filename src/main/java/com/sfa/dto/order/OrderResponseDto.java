@@ -28,6 +28,7 @@ public record OrderResponseDto(
         String deliveryAddressLine,
         String customerSignature,
         String salespersonSignature,
+        String poNumber,
         String invoiceNumber,
         List<OrderItemDto> items
 ) {
@@ -79,6 +80,7 @@ public record OrderResponseDto(
                 order.getDeliveryAddressLine(),
                 order.getCustomerSignature(),
                 order.getSalespersonSignature(),
+                order.getPoNumber(),
                 invoiceNumber,
                 order.getItems().stream().map(item -> {
                     var p = item.getProduct();

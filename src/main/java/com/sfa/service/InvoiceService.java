@@ -1,13 +1,16 @@
 package com.sfa.service;
 
 import com.sfa.dto.invoice.InvoiceSummaryDto;
+import com.sfa.entity.ChartOfAccount;
 import com.sfa.entity.Invoice;
+import com.sfa.entity.JournalEntry;
 import com.sfa.entity.Order;
 import com.sfa.entity.OrderItem;
 import com.sfa.entity.Product;
 import com.sfa.entity.ProductCategory;
 import com.sfa.exception.BusinessException;
 import com.sfa.exception.ResourceNotFoundException;
+import com.sfa.repository.ChartOfAccountRepository;
 import com.sfa.repository.InvoiceRepository;
 import com.sfa.repository.OrderRepository;
 import jakarta.persistence.EntityManager;
@@ -23,6 +26,8 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.io.IOException;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
@@ -41,11 +46,18 @@ import java.util.stream.Collectors;
 @Transactional
 public class InvoiceService {
 
-    private final InvoiceRepository     invoiceRepo;
-    private final OrderRepository       orderRepo;
-    private final InvoicePdfGenerator   pdfGenerator;
-    private final MinioStorageService   storage;
-    private final AuditLogService       auditLog;
+    private static final String ACCOUNTS_RECEIVABLE_CODE = "1100";
+    private static final String SALES_REVENUE_CODE       = "4000";
+    private static final String SALES_DISCOUNTS_CODE     = "4900";
+    private static final String TAX_PAYABLE_CODE         = "2200";
+
+    private final InvoiceRepository        invoiceRepo;
+    private final OrderRepository          orderRepo;
+    private final InvoicePdfGenerator      pdfGenerator;
+    private final MinioStorageService      storage;
+    private final AuditLogService          auditLog;
+    private final JournalEntryService      journalEntryService;
+    private final ChartOfAccountRepository accountRepo;
 
     @PersistenceContext
     private EntityManager em;
@@ -172,6 +184,11 @@ public class InvoiceService {
 
         Invoice saved = invoiceRepo.save(invoice);
 
+        // Always posts, regardless of this install's FINANCE license flag — the license only
+        // gates UI/API access to Financial Management, not the ledger's data integrity, so an
+        // install that enables FINANCE later still has a complete history instead of a gap.
+        postInvoiceIssuedEntry(saved, userId);
+
         // Generate PDF asynchronously and store in MinIO
         try {
             byte[] pdfBytes = pdfGenerator.generate(saved, order);
@@ -237,6 +254,23 @@ public class InvoiceService {
         return pdfGenerator.generateEscPos(invoice, order);
     }
 
+    /**
+     * TEMPORARY — dev/QA aid, remove before production (see InvoiceController's matching note).
+     * Narrow receipt-style PDF mirroring the exact thermal-print content/layout — for
+     * the mobile app's print-preview screen, not persisted (unlike getPdfBytes, this
+     * is cheap to regenerate and has no reason to be cached in MinIO).
+     */
+    public byte[] getThermalPreviewBytes(UUID invoiceId) {
+        Invoice invoice = getInvoice(invoiceId);
+        Order   order   = invoice.getOrder();
+        try {
+            return pdfGenerator.generateThermalPreview(invoice, order);
+        } catch (IOException ex) {
+            log.error("Thermal preview generation failed for invoice {}: {}", invoice.getInvoiceNumber(), ex.getMessage());
+            throw new BusinessException("Failed to generate print preview for invoice " + invoice.getInvoiceNumber());
+        }
+    }
+
     public Invoice recordPrint(UUID invoiceId) {
         Invoice invoice = getInvoice(invoiceId);
         invoice.incrementPrintCount();
@@ -253,6 +287,42 @@ public class InvoiceService {
     public Invoice getInvoiceByOrder(UUID orderId) {
         return invoiceRepo.findByOrderId(orderId)
                 .orElseThrow(() -> new ResourceNotFoundException("Invoice for order", orderId));
+    }
+
+    /**
+     * Dr Accounts Receivable = total, Dr Sales Discounts = discountTotal (contra-revenue,
+     * so a discount can never net Sales Revenue into a negative credit), Cr Sales Revenue =
+     * subtotal (gross), Cr Tax Payable = taxTotal (if any). Balances because
+     * total = subtotal - discountTotal + taxTotal (see Order.recalculateTotals()).
+     */
+    private void postInvoiceIssuedEntry(Invoice invoice, UUID userId) {
+        ChartOfAccount ar        = getSystemAccount(ACCOUNTS_RECEIVABLE_CODE);
+        ChartOfAccount revenue   = getSystemAccount(SALES_REVENUE_CODE);
+        ChartOfAccount discounts = getSystemAccount(SALES_DISCOUNTS_CODE);
+        ChartOfAccount taxPayable = getSystemAccount(TAX_PAYABLE_CODE);
+
+        List<JournalEntryService.LinePosting> lines = new ArrayList<>();
+        lines.add(new JournalEntryService.LinePosting(ar.getId(), invoice.getTotal(), null, invoice.getInvoiceNumber()));
+        if (invoice.getDiscountTotal() != null && invoice.getDiscountTotal().compareTo(BigDecimal.ZERO) > 0) {
+            lines.add(new JournalEntryService.LinePosting(discounts.getId(), invoice.getDiscountTotal(), null, invoice.getInvoiceNumber()));
+        }
+        lines.add(new JournalEntryService.LinePosting(revenue.getId(), null, invoice.getSubtotal(), invoice.getInvoiceNumber()));
+        if (invoice.getTaxTotal() != null && invoice.getTaxTotal().compareTo(BigDecimal.ZERO) > 0) {
+            lines.add(new JournalEntryService.LinePosting(taxPayable.getId(), null, invoice.getTaxTotal(), invoice.getInvoiceNumber()));
+        }
+
+        journalEntryService.postEntry(
+                invoice.getIssuedDate(),
+                "Invoice " + invoice.getInvoiceNumber() + " issued — " + invoice.getCustomer().getName(),
+                lines,
+                JournalEntry.SourceType.INVOICE_ISSUED,
+                invoice.getId(),
+                userId);
+    }
+
+    private ChartOfAccount getSystemAccount(String code) {
+        return accountRepo.findByAccountCode(code)
+                .orElseThrow(() -> new BusinessException("Required system account missing: " + code));
     }
 
     private String generateInvoiceNumber(Order order) {

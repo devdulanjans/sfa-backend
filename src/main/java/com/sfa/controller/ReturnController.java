@@ -10,6 +10,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
@@ -36,6 +38,29 @@ public class ReturnController {
     public ResponseEntity<Return> create(@Valid @RequestBody CreateReturnRequest req) {
         Return ret = returnService.create(req);
         return ResponseEntity.created(URI.create("/api/returns/" + ret.getId())).body(ret);
+    }
+
+    @GetMapping("/{id}")
+    public ResponseEntity<Return> get(@PathVariable UUID id) {
+        return ResponseEntity.ok(returnService.getById(id));
+    }
+
+    @GetMapping("/{id}/pdf")
+    public ResponseEntity<byte[]> downloadPdf(@PathVariable UUID id) {
+        Return ret = returnService.getById(id);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename=\"" + ret.getReturnNumber() + ".pdf\"")
+                .contentType(MediaType.APPLICATION_PDF)
+                .body(returnService.getPdfBytes(id));
+    }
+
+    @GetMapping("/{id}/thermal")
+    public ResponseEntity<byte[]> thermalData(@PathVariable UUID id) {
+        returnService.recordPrint(id);
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .body(returnService.getThermalBytes(id));
     }
 
     @PatchMapping("/{id}/status")

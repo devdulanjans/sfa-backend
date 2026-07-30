@@ -1,5 +1,7 @@
 package com.sfa.controller;
 
+import com.sfa.dto.InvoicePaymentDto;
+import com.sfa.dto.RecordInvoicePaymentRequest;
 import com.sfa.dto.invoice.InvoiceSummaryDto;
 import com.sfa.entity.Invoice;
 import com.sfa.entity.Role;
@@ -8,6 +10,7 @@ import com.sfa.license.RequiresLicense;
 import com.sfa.security.UserDetailsImpl;
 import com.sfa.service.DetailedExportGenerator;
 import com.sfa.service.InvoiceExportGenerator;
+import com.sfa.service.InvoicePaymentService;
 import com.sfa.service.InvoiceService;
 import com.sfa.service.InvoiceService.InvoiceFilter;
 import com.sfa.exception.BusinessException;
@@ -23,6 +26,7 @@ import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
@@ -42,6 +46,7 @@ public class InvoiceController {
     private final InvoiceService invoiceService;
     private final InvoiceExportGenerator invoiceExportGenerator;
     private final DetailedExportGenerator detailedExportGenerator;
+    private final InvoicePaymentService invoicePaymentService;
 
     @GetMapping
     @Operation(summary = "List invoices with optional filters")
@@ -203,5 +208,40 @@ public class InvoiceController {
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_OCTET_STREAM)
                 .body(invoiceService.getThermalBytes(id));
+    }
+
+    // TEMPORARY — dev/QA aid for visually verifying the thermal receipt layout without
+    // a physical printer. Remove this endpoint (and InvoicePdfGenerator.generateThermalPreview,
+    // InvoiceService.getThermalPreviewBytes, and sfa-mobile's InvoicePrintPreviewScreen fetch
+    // of it) before shipping to production.
+    @GetMapping("/{id}/thermal-preview")
+    @Operation(summary = "Preview the thermal receipt layout as a narrow PDF — same content/order as /thermal, not an actual print (doesn't bump printCount)")
+    public ResponseEntity<byte[]> thermalPreview(@PathVariable UUID id) {
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_PDF)
+                .body(invoiceService.getThermalPreviewBytes(id));
+    }
+
+    // These two endpoints move real money through the ledger, so — unlike the rest of this
+    // controller — they carry their own explicit license/role annotations, overriding the
+    // class-level @RequiresLicense(SFA): without this override they'd inherit the SFA
+    // license instead of requiring FINANCE, letting any SFA-only install record ledger
+    // postings it was never sold access to.
+    @GetMapping("/{id}/payments")
+    @RequiresLicense(LicensedPackage.FINANCE)
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','SALES_MANAGER','FINANCE_USER')")
+    @Operation(summary = "List payments recorded against this invoice")
+    public List<InvoicePaymentDto> payments(@PathVariable UUID id) {
+        return invoicePaymentService.listForInvoice(id);
+    }
+
+    @PostMapping("/{id}/payments")
+    @RequiresLicense(LicensedPackage.FINANCE)
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','SALES_MANAGER','FINANCE_USER')")
+    @Operation(summary = "Record a payment against this invoice — posts Dr Bank / Cr Accounts Receivable")
+    public InvoicePaymentDto recordPayment(@PathVariable UUID id,
+                                            @RequestBody RecordInvoicePaymentRequest request,
+                                            @AuthenticationPrincipal UserDetailsImpl user) {
+        return invoicePaymentService.recordPayment(id, request, user.getId());
     }
 }

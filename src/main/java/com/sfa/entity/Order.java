@@ -92,6 +92,11 @@ public class Order {
     @Column(name = "salesperson_signature", columnDefinition = "text")
     private String salespersonSignature;
 
+    // Entered by the sales rep on the Order Review screen — optional, prints on the
+    // invoice's "Purchase Order No" line when present (blank dots otherwise).
+    @Column(name = "po_number", length = 50)
+    private String poNumber;
+
     @Column(name = "order_date", nullable = false)
     private Instant orderDate;
 

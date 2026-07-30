@@ -42,6 +42,32 @@ public class ReturnService {
     private final CustomerRepository customerRepository;
     private final ProductRepository productRepository;
     private final UserRepository userRepository;
+    private final ReturnDamageNoteGenerator noteGenerator;
+
+    @Transactional(readOnly = true)
+    public Return getById(UUID id) {
+        return returnRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Return", id));
+    }
+
+    public byte[] getPdfBytes(UUID id) {
+        try {
+            return noteGenerator.generateReturnPdf(getById(id));
+        } catch (java.io.IOException ex) {
+            throw new BusinessException("Failed to generate PDF for return " + id);
+        }
+    }
+
+    public byte[] getThermalBytes(UUID id) {
+        return noteGenerator.generateReturnThermal(getById(id));
+    }
+
+    @Transactional
+    public Return recordPrint(UUID id) {
+        Return ret = getById(id);
+        ret.incrementPrintCount();
+        return returnRepository.save(ret);
+    }
 
     public Page<Return> list(Pageable pageable) {
         UserDetailsImpl principal = currentUser();

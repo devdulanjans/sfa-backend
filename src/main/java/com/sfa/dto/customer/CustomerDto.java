@@ -29,7 +29,10 @@ public record CustomerDto(
         List<UUID> assignedProductIds,
         List<UUID> effectiveAssignedProductIds,
         List<CustomerAddressDto> addresses,
-        Instant deletedAt
+        Instant deletedAt,
+        UUID parentCustomerId,
+        String parentCustomerName,
+        int branchCount
 ) {
     public static CustomerDto from(Customer c) {
         List<UUID> productIds = Hibernate.isInitialized(c.getAssignedProducts())
@@ -61,11 +64,27 @@ public record CustomerDto(
      * customer group the customer belongs to. Mobile's order-creation catalog filter reads
      * this field specifically so group-assigned products restrict the catalog exactly like
      * direct assignments already do.
+     *
+     * {@code parentCustomerName} and {@code branchCount} default to null/0 here — accurate for
+     * a brand-new customer (create/quickCreate), and harmless-but-stale on update (the mutation
+     * response isn't what the Branches card reads; it re-fetches via the branches/branch-summary
+     * endpoints). Callers needing accurate values for a batch of existing customers should use
+     * {@link CustomerService#toDtos}, the only place that bulk-loads them.
      */
     public static CustomerDto from(Customer c, List<UUID> assignedProductIds, List<UUID> effectiveAssignedProductIds) {
+        return from(c, assignedProductIds, effectiveAssignedProductIds, null, 0);
+    }
+
+    public static CustomerDto from(Customer c, List<UUID> assignedProductIds, List<UUID> effectiveAssignedProductIds,
+                                    String parentCustomerName, int branchCount) {
         List<CustomerAddressDto> addrs = c.getAddresses().stream()
                 .map(CustomerAddressDto::from)
                 .toList();
+
+        // Calling getId() on a lazy @ManyToOne proxy is safe and does not trigger initialization
+        // (Hibernate proxies already know their own identifier) — unlike parentCustomerName,
+        // which requires the association to actually be loaded (see toDtos()).
+        UUID parentId = c.getParentCustomer() != null ? c.getParentCustomer().getId() : null;
 
         return new CustomerDto(
                 c.getId(),
@@ -89,7 +108,10 @@ public record CustomerDto(
                 assignedProductIds,
                 effectiveAssignedProductIds,
                 addrs,
-                c.getDeletedAt()
+                c.getDeletedAt(),
+                parentId,
+                parentCustomerName,
+                branchCount
         );
     }
 }

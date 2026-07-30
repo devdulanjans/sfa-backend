@@ -38,4 +38,22 @@ public interface InvoiceRepository extends JpaRepository<Invoice, UUID>, JpaSpec
         return countIssuedBetween(from, to, Invoice.InvoiceStatus.ISSUED);
     }
 
+    @Query("""
+        SELECT i.customer.id, i.customer.name, SUM(i.total - i.paidAmount)
+        FROM Invoice i
+        WHERE i.status IN :statuses
+        GROUP BY i.customer.id, i.customer.name
+        HAVING SUM(i.total - i.paidAmount) > 0
+        ORDER BY SUM(i.total - i.paidAmount) DESC
+        """)
+    List<Object[]> findOutstandingByCustomer(@Param("statuses") List<Invoice.InvoiceStatus> statuses);
+
+    @Query("""
+        SELECT i FROM Invoice i JOIN FETCH i.customer
+        WHERE i.customer.id = :customerId AND i.status IN :statuses
+        ORDER BY i.issuedDate DESC
+        """)
+    List<Invoice> findOutstandingForCustomer(
+            @Param("customerId") UUID customerId,
+            @Param("statuses") List<Invoice.InvoiceStatus> statuses);
 }

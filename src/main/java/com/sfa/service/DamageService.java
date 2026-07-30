@@ -39,6 +39,32 @@ public class DamageService {
     private final CustomerRepository customerRepository;
     private final ProductRepository productRepository;
     private final UserRepository userRepository;
+    private final ReturnDamageNoteGenerator noteGenerator;
+
+    @Transactional(readOnly = true)
+    public Damage getById(UUID id) {
+        return damageRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Damage", id));
+    }
+
+    public byte[] getPdfBytes(UUID id) {
+        try {
+            return noteGenerator.generateDamagePdf(getById(id));
+        } catch (java.io.IOException ex) {
+            throw new BusinessException("Failed to generate PDF for damage " + id);
+        }
+    }
+
+    public byte[] getThermalBytes(UUID id) {
+        return noteGenerator.generateDamageThermal(getById(id));
+    }
+
+    @Transactional
+    public Damage recordPrint(UUID id) {
+        Damage damage = getById(id);
+        damage.incrementPrintCount();
+        return damageRepository.save(damage);
+    }
 
     public Page<Damage> list(Pageable pageable) {
         UserDetailsImpl principal = currentUser();

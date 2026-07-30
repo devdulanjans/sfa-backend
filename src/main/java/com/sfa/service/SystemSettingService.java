@@ -58,6 +58,13 @@ public class SystemSettingService {
                 .orElse(false);
     }
 
+    @Transactional(readOnly = true)
+    public boolean isMileageManagementEnabled() {
+        return repo.findById("mileage_management_enabled")
+                .map(s -> Boolean.parseBoolean(s.getValue()))
+                .orElse(true);
+    }
+
     public SystemSetting update(String key, String value, UUID updatedBy) {
         SystemSetting setting = repo.findById(key)
                 .orElseThrow(() -> new ResourceNotFoundException("Setting not found with key: " + key));

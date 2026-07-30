@@ -64,7 +64,8 @@ public class AuthService {
                 distributors,
                 permissions,
                 licenseService.isSfaEnabled(),
-                licenseService.isPosEnabled());
+                licenseService.isPosEnabled(),
+                licenseService.isFinanceEnabled());
     }
 
     public LoginResponse refresh(RefreshRequest request) {
@@ -98,7 +99,8 @@ public class AuthService {
                 distributors,
                 permissions,
                 licenseService.isSfaEnabled(),
-                licenseService.isPosEnabled());
+                licenseService.isPosEnabled(),
+                licenseService.isFinanceEnabled());
     }
 
     /**
