@@ -73,6 +73,13 @@ public class InvoicePdfGenerator {
     private static final float PDF_SIGNATURE_MAX_WIDTH  = 130f;
     private static final float PDF_SIGNATURE_MAX_HEIGHT = 36f;
     private static final int SIGNATURE_WIDTH_PX = 180;
+    // Caps the raster height regardless of the captured signature's aspect ratio —
+    // without this, a signature cropped tight to a tall/narrow stroke box would
+    // scale to targetWidth and print at whatever height that implies, sometimes
+    // filling much more of the receipt than a signature should. Matches the PDF
+    // signature's ~3.6:1 width:height ratio (PDF_SIGNATURE_MAX_WIDTH/_MAX_HEIGHT)
+    // so both outputs read the same size.
+    private static final int SIGNATURE_MAX_HEIGHT_PX = 50;
 
     private static final String[] UNITS = {"", "One", "Two", "Three", "Four", "Five", "Six",
             "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen",
@@ -413,15 +420,12 @@ public class InvoicePdfGenerator {
         String copyLabel = pc <= 1 ? "**  ORIGINAL  **" : "**  COPY " + (pc - 1) + "  **";
         txt(buf, copyLabel + "\n");
 
-        // TAX INVOICE / INVOICE banner, right after Original/Copy — reverse video
-        // (white-on-black) + double-height + bold to stand out like a highlighted
-        // box, mirroring the PDF header's highlighted "TAX INVOICE" box.
+        // TAX INVOICE / INVOICE banner, right after Original/Copy — double-height
+        // + bold (no reverse video) so it stands out without a black background.
         String invoiceTypeLabel = isVatInvoice ? "TAX INVOICE" : "INVOICE";
-        esc(buf, 0x1D, 0x42, 0x01); // reverse video on
         esc(buf, 0x1B, 0x21, 0x18); // double-height + bold
         txt(buf, invoiceTypeLabel + "\n");
         esc(buf, 0x1B, 0x21, 0x00); // reset text size/weight
-        esc(buf, 0x1D, 0x42, 0x00); // reverse video off
         txt(buf, "\n");
 
         esc(buf, 0x1B, 0x61, 0x00); // left alignment for everything from here on
@@ -458,7 +462,7 @@ public class InvoicePdfGenerator {
         Customer billingParty = billingParty(invoice.getCustomer());
         txt(buf, "Purchaser's TIN   : " + safe(invoice.getCustomer().getTaxNumber(), "N/A") + "\n");
         txt(buf, "Purchaser's Name  : " + trunc(billingParty.getName(), ADDR_WIDTH) + "\n");
-        txt(buf, "Address           : " + trunc(safe(primaryAddressLine(billingParty), "—"), ADDR_WIDTH) + "\n");
+        txt(buf, wrapLabeledField("Address           : ", safe(primaryAddressLine(billingParty), "—"), W));
         txt(buf, "Contact No        : " + displayPhone(invoice.getCustomer().getPhone()) + "\n");
         txt(buf, "Place of Supply   : " + safe(invoice.getCustomer().getPlaceOfSupplier(), dots(20)) + "\n");
         txt(buf, "=".repeat(W) + "\n\n");
@@ -621,7 +625,6 @@ public class InvoicePdfGenerator {
         doc.add(rLine("", mono));
         doc.add(rLine(copyLabel, monoBold, RECEIPT_FONT_SZ, TextAlignment.CENTER));
         doc.add(new Paragraph(invoiceTypeLabel).setFont(monoBold).setFontSize(RECEIPT_FONT_SZ + 2)
-                .setFontColor(ColorConstants.WHITE).setBackgroundColor(ColorConstants.BLACK)
                 .setTextAlignment(TextAlignment.CENTER).setMultipliedLeading(1.1f).setMarginBottom(2));
         doc.add(rLine("", mono));
         doc.add(rLine("=".repeat(W), mono));
@@ -656,7 +659,7 @@ public class InvoicePdfGenerator {
         Customer billingParty = billingParty(invoice.getCustomer());
         doc.add(rLine("Purchaser's TIN   : " + safe(invoice.getCustomer().getTaxNumber(), "N/A"), mono));
         doc.add(rLine("Purchaser's Name  : " + trunc(billingParty.getName(), 43), mono));
-        doc.add(rLine("Address           : " + trunc(safe(primaryAddressLine(billingParty), "—"), 43), mono));
+        doc.add(rWrapped("Address           : ", safe(primaryAddressLine(billingParty), "—"), W, mono));
         doc.add(rLine("Contact No        : " + displayPhone(invoice.getCustomer().getPhone()), mono));
         doc.add(rLine("Place of Supply   : " + safe(invoice.getCustomer().getPlaceOfSupplier(), dots(20)), mono));
         doc.add(rLine("=".repeat(W), mono));
@@ -755,9 +758,28 @@ public class InvoicePdfGenerator {
                 .setTextAlignment(align).setMultipliedLeading(1.1f).setMarginBottom(0);
     }
 
-    private Paragraph rWrapped(String label, String value, int totalWidth, PdfFont font) {
-        return new Paragraph(wrapLabeledField(label, value, totalWidth))
-                .setFont(font).setFontSize(RECEIPT_FONT_SZ).setMultipliedLeading(1.1f).setMarginBottom(0);
+    /**
+     * PDF-preview counterpart to wrapLabeledField. iText's line renderer trims
+     * leading whitespace at the start of every line — including a continuation
+     * line produced by an explicit "\n" — so building this as one Paragraph with
+     * space-character indentation (like the ESC/POS text version) silently loses
+     * the indent and the wrapped text collapses back under the label instead of
+     * lining up under the value. A left margin isn't whitespace, so it survives:
+     * each continuation line is its own zero-top-margin Paragraph indented by
+     * label.length() character-widths (Courier is exactly 0.6em/char).
+     */
+    private Div rWrapped(String label, String value, int totalWidth, PdfFont font) {
+        List<String> lines = wrapValue(label, value, totalWidth);
+        float indentPt = label.length() * 0.6f * RECEIPT_FONT_SZ;
+        Div div = new Div().setMargin(0);
+        for (int i = 0; i < lines.size(); i++) {
+            Paragraph p = new Paragraph((i == 0 ? label : "") + lines.get(i))
+                    .setFont(font).setFontSize(RECEIPT_FONT_SZ).setMultipliedLeading(1.1f)
+                    .setMarginTop(0).setMarginBottom(0);
+            if (i > 0) p.setMarginLeft(indentPt);
+            div.add(p);
+        }
+        return div;
     }
 
     /** Real (not 1-bit rasterized) signature image for the receipt preview — a
@@ -821,12 +843,13 @@ public class InvoicePdfGenerator {
     }
 
     /**
-     * Word-wraps "label + value" into one or more lines that each fit within
-     * totalWidth chars, continuation lines indented to align under the value
-     * (not the label) — used so long addresses/amounts-in-words never run past
-     * the thermal printer's line width instead of being hard-truncated.
+     * Splits "value" into chunks that each fit within (totalWidth - label.length())
+     * chars, breaking on the last space that fits rather than mid-word. Shared by
+     * wrapLabeledField (ESC/POS) and rWrapped (PDF preview) so the two renderers'
+     * wrap points never drift apart — only how each renders the continuation
+     * indent differs.
      */
-    private String wrapLabeledField(String label, String value, int totalWidth) {
+    private List<String> wrapValue(String label, String value, int totalWidth) {
         int valueWidth = Math.max(10, totalWidth - label.length());
         String remaining = value == null ? "" : value;
         List<String> lines = new ArrayList<>();
@@ -837,7 +860,17 @@ public class InvoicePdfGenerator {
             remaining = remaining.substring(breakAt).trim();
         }
         lines.add(remaining);
+        return lines;
+    }
 
+    /**
+     * Word-wraps "label + value" into one or more lines that each fit within
+     * totalWidth chars, continuation lines indented with plain spaces to align
+     * under the value (not the label) — safe here since raw ESC/POS text bytes
+     * print literally, unlike the PDF preview (see rWrapped).
+     */
+    private String wrapLabeledField(String label, String value, int totalWidth) {
+        List<String> lines = wrapValue(label, value, totalWidth);
         String indent = " ".repeat(label.length());
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < lines.size(); i++) {
@@ -941,25 +974,40 @@ public class InvoicePdfGenerator {
     }
 
     /**
-     * Rasterizes an image (logo or signature) and emits it via the ESC/POS "GS v 0"
-     * raster bit image command. Scales to [targetWidth] dots (preserving
-     * aspect ratio) and thresholds to 1-bit black/white — thermal printers
-     * have no grayscale, so a simple luminance threshold is used rather than
-     * dithering. Never throws: a broken/unreadable image just prints nothing
-     * rather than failing the whole invoice — returns false so callers with a
-     * text fallback (e.g. the signature blank line) know to use it.
+     * Rasterizes an image (logo) and emits it via the ESC/POS "GS v 0" raster
+     * bit image command, scaled to [targetWidth] dots with no height limit.
      */
     private boolean printLogoEscPos(ByteArrayOutputStream buf, byte[] logoBytes, int targetWidth) {
+        return printRasterEscPos(buf, logoBytes, targetWidth, Integer.MAX_VALUE);
+    }
+
+    /**
+     * Rasterizes an image (logo or signature) and emits it via the ESC/POS "GS v 0"
+     * raster bit image command. Scales to [targetWidth] dots preserving aspect
+     * ratio, then — if that would make it taller than [maxHeight] — scales down
+     * further by height instead so it never prints taller than intended
+     * regardless of the source image's aspect ratio. Thresholds to 1-bit
+     * black/white — thermal printers have no grayscale, so a simple luminance
+     * threshold is used rather than dithering. Never throws: a broken/unreadable
+     * image just prints nothing rather than failing the whole invoice — returns
+     * false so callers with a text fallback (e.g. the signature blank line) know
+     * to use it.
+     */
+    private boolean printRasterEscPos(ByteArrayOutputStream buf, byte[] imageBytes, int targetWidth, int maxHeight) {
         try {
-            BufferedImage src = ImageIO.read(new ByteArrayInputStream(logoBytes));
+            BufferedImage src = ImageIO.read(new ByteArrayInputStream(imageBytes));
             if (src == null) {
                 log.warn("ESC/POS raster decode returned null — unsupported/corrupt image bytes ({} bytes)",
-                        logoBytes.length);
+                        imageBytes.length);
                 return false;
             }
 
             int width  = targetWidth;
             int height = Math.max(1, Math.round(src.getHeight() * (width / (float) src.getWidth())));
+            if (height > maxHeight) {
+                height = maxHeight;
+                width  = Math.max(1, Math.round(src.getWidth() * (height / (float) src.getHeight())));
+            }
 
             BufferedImage scaled = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
             Graphics2D g = scaled.createGraphics();
@@ -1000,7 +1048,7 @@ public class InvoicePdfGenerator {
         if (base64Signature != null && !base64Signature.isBlank()) {
             try {
                 byte[] bytes = Base64.getDecoder().decode(base64Signature);
-                if (printLogoEscPos(buf, bytes, targetWidth)) return;
+                if (printRasterEscPos(buf, bytes, targetWidth, SIGNATURE_MAX_HEIGHT_PX)) return;
                 log.warn("Signature raster printing failed — falling back to blank dotted line");
             } catch (Exception e) {
                 log.warn("Could not decode signature base64 for ESC/POS printing ({} bytes): {}",
