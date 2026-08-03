@@ -74,10 +74,11 @@ public class CustomerController {
     public Page<CustomerDto> branches(
             @AuthenticationPrincipal UserDetailsImpl user,
             @PathVariable UUID id,
+            @RequestParam(defaultValue = "") String search,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
         checkAccess(user, id);
-        return customerService.listBranches(id, PageRequest.of(page, size, Sort.by("name")));
+        return customerService.listBranches(id, search, PageRequest.of(page, size, Sort.by("name")));
     }
 
     @GetMapping("/{id}/branch-summary")

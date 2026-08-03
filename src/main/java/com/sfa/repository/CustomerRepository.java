@@ -91,12 +91,27 @@ public interface CustomerRepository extends JpaRepository<Customer, UUID> {
 
     // ── Branches ─────────────────────────────────────────────────────────────
 
+    // query defaults to "" from the service layer when no search term is given, which
+    // matches every branch via the LIKE '%%' wildcard — so this one query serves both
+    // the plain branch list and the searched branch list.
     @Query(
-        value = "SELECT c FROM Customer c LEFT JOIN FETCH c.category WHERE c.parentCustomer.id = :parentId "
-               + "AND c.deletedAt IS NULL ORDER BY LOWER(c.name) ASC",
-        countQuery = "SELECT COUNT(c) FROM Customer c WHERE c.parentCustomer.id = :parentId AND c.deletedAt IS NULL"
+        value = """
+            SELECT c FROM Customer c LEFT JOIN FETCH c.category WHERE
+            c.parentCustomer.id = :parentId AND c.deletedAt IS NULL AND (
+            LOWER(c.name) LIKE LOWER(CONCAT('%', :query, '%')) OR
+            LOWER(c.customerCode) LIKE LOWER(CONCAT('%', :query, '%')) OR
+            LOWER(c.placeOfSupplier) LIKE LOWER(CONCAT('%', :query, '%')))
+            ORDER BY LOWER(c.name) ASC
+        """,
+        countQuery = """
+            SELECT COUNT(c) FROM Customer c WHERE
+            c.parentCustomer.id = :parentId AND c.deletedAt IS NULL AND (
+            LOWER(c.name) LIKE LOWER(CONCAT('%', :query, '%')) OR
+            LOWER(c.customerCode) LIKE LOWER(CONCAT('%', :query, '%')) OR
+            LOWER(c.placeOfSupplier) LIKE LOWER(CONCAT('%', :query, '%')))
+        """
     )
-    Page<Customer> findByParentCustomerId(@Param("parentId") UUID parentId, Pageable pageable);
+    Page<Customer> searchByParentCustomerId(@Param("parentId") UUID parentId, @Param("query") String query, Pageable pageable);
 
     boolean existsByParentCustomerId(UUID parentId);
 

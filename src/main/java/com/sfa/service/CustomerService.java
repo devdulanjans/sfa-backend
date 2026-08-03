@@ -69,9 +69,10 @@ public class CustomerService {
     }
 
     @Transactional(readOnly = true)
-    public Page<CustomerDto> listBranches(UUID parentId, Pageable pageable) {
+    public Page<CustomerDto> listBranches(UUID parentId, String search, Pageable pageable) {
         findOrThrow(parentId); // 404s cleanly if the parent doesn't exist
-        Page<Customer> page = customerRepository.findByParentCustomerId(parentId, pageable);
+        String q = search == null ? "" : search;
+        Page<Customer> page = customerRepository.searchByParentCustomerId(parentId, q, pageable);
         List<CustomerDto> dtos = toDtos(page.getContent());
         return new org.springframework.data.domain.PageImpl<>(dtos, pageable, page.getTotalElements());
     }
