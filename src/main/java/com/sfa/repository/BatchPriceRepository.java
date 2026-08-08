@@ -1,6 +1,8 @@
 package com.sfa.repository;
 
 import com.sfa.entity.BatchPrice;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -15,6 +17,32 @@ public interface BatchPriceRepository extends JpaRepository<BatchPrice, UUID> {
 
     boolean existsByCustomerGroupId(UUID customerGroupId);
     boolean existsByProductGroupId(UUID productGroupId);
+
+    /**
+     * Admin list-page filtering — each param is optional (null = no restriction on that
+     * dimension). Customer/customer-group/product filters match the row's direct target only
+     * (not group membership), mirroring the distinct "Customer" vs "Customer Group" columns
+     * shown in the admin table. Date range matches any rule whose [startDate, endDate] validity
+     * window overlaps the given range. Explicit LEFT JOINs on product/customer avoid the
+     * implicit-inner-join pitfall noted on {@link #findBestCustomerBatchPrice} above.
+     */
+    @Query("""
+        SELECT bp FROM BatchPrice bp
+        LEFT JOIN bp.product p
+        LEFT JOIN bp.customer c
+        WHERE (:customerId IS NULL OR c.id = :customerId)
+          AND (:customerGroupId IS NULL OR bp.customerGroup.id = :customerGroupId)
+          AND (:productId IS NULL OR p.id = :productId)
+          AND (:startDate IS NULL OR bp.endDate IS NULL OR bp.endDate >= :startDate)
+          AND (:endDate IS NULL OR bp.startDate <= :endDate)
+    """)
+    Page<BatchPrice> findFiltered(
+            @Param("customerId") UUID customerId,
+            @Param("customerGroupId") UUID customerGroupId,
+            @Param("productId") UUID productId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate,
+            Pageable pageable);
 
     /**
      * Best customer-targeted tier for the given quantity — matches a row whose customer target
