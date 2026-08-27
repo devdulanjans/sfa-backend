@@ -59,6 +59,21 @@ public class DamageService {
         return noteGenerator.generateDamageThermal(getById(id));
     }
 
+    /**
+     * TEMPORARY — dev/QA aid, remove before production (see InvoiceService's
+     * matching getThermalPreviewBytes). Narrow receipt-style PDF mirroring the
+     * exact thermal-print content/layout, for the mobile app's print-preview
+     * screen — not persisted, cheap to regenerate.
+     */
+    public byte[] getThermalPreviewBytes(UUID id) {
+        Damage damage = getById(id);
+        try {
+            return noteGenerator.generateDamageThermalPreview(damage);
+        } catch (java.io.IOException ex) {
+            throw new BusinessException("Failed to generate print preview for damage " + damage.getDamageNumber());
+        }
+    }
+
     @Transactional
     public Damage recordPrint(UUID id) {
         Damage damage = getById(id);

@@ -38,3 +38,6 @@ target/
 *.pem
 *.p12
 *.jks
+
+### DB dumps — may contain real production data, never commit ###
+db-backups/

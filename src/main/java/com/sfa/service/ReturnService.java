@@ -62,6 +62,21 @@ public class ReturnService {
         return noteGenerator.generateReturnThermal(getById(id));
     }
 
+    /**
+     * TEMPORARY — dev/QA aid, remove before production (see InvoiceService's
+     * matching getThermalPreviewBytes). Narrow receipt-style PDF mirroring the
+     * exact thermal-print content/layout, for the mobile app's print-preview
+     * screen — not persisted, cheap to regenerate.
+     */
+    public byte[] getThermalPreviewBytes(UUID id) {
+        Return ret = getById(id);
+        try {
+            return noteGenerator.generateReturnThermalPreview(ret);
+        } catch (java.io.IOException ex) {
+            throw new BusinessException("Failed to generate print preview for return " + ret.getReturnNumber());
+        }
+    }
+
     @Transactional
     public Return recordPrint(UUID id) {
         Return ret = getById(id);

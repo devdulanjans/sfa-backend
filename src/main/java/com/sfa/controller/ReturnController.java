@@ -63,6 +63,17 @@ public class ReturnController {
                 .body(returnService.getThermalBytes(id));
     }
 
+    // TEMPORARY — dev/QA aid for visually verifying the thermal receipt layout without
+    // a physical printer. Remove this endpoint (and ReturnService.getThermalPreviewBytes,
+    // ReturnDamageNoteGenerator.generateReturnThermalPreview, and sfa-mobile's return
+    // print-preview screen) before shipping to production.
+    @GetMapping("/{id}/thermal-preview")
+    public ResponseEntity<byte[]> thermalPreview(@PathVariable UUID id) {
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_PDF)
+                .body(returnService.getThermalPreviewBytes(id));
+    }
+
     @PatchMapping("/{id}/status")
     @PreAuthorize("hasAnyRole('SUPER_ADMIN','SALES_MANAGER')")
     public Return updateStatus(@PathVariable UUID id, @RequestParam String status) {

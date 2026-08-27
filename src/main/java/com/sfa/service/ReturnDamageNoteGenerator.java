@@ -14,10 +14,12 @@ import com.itextpdf.layout.Document;
 import com.itextpdf.layout.borders.Border;
 import com.itextpdf.layout.borders.SolidBorder;
 import com.itextpdf.layout.element.Cell;
+import com.itextpdf.layout.element.Div;
 import com.itextpdf.layout.element.Image;
 import com.itextpdf.layout.element.Paragraph;
 import com.itextpdf.layout.element.Table;
 import com.itextpdf.layout.element.Text;
+import com.itextpdf.layout.properties.HorizontalAlignment;
 import com.itextpdf.layout.properties.TextAlignment;
 import com.itextpdf.layout.properties.UnitValue;
 import com.itextpdf.layout.properties.VerticalAlignment;
@@ -44,6 +46,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -104,6 +107,16 @@ public class ReturnDamageNoteGenerator {
 
     public byte[] generateDamageThermal(Damage damage) {
         return generateThermal(toNoteData(damage));
+    }
+
+    // TEMPORARY — dev/QA aid, remove before production (see InvoicePdfGenerator's
+    // matching generateThermalPreview and the notes in InvoiceController/InvoiceService).
+    public byte[] generateReturnThermalPreview(Return ret) throws IOException {
+        return generateThermalPreview(toNoteData(ret));
+    }
+
+    public byte[] generateDamageThermalPreview(Damage damage) throws IOException {
+        return generateThermalPreview(toNoteData(damage));
     }
 
     // ── Entity -> NoteData adapters ──────────────────────────────────────────
@@ -396,6 +409,159 @@ public class ReturnDamageNoteGenerator {
         return buf.toByteArray();
     }
 
+    // ── TEMPORARY — dev/QA aid, remove before production ────────────────────
+    // Thermal receipt preview (narrow PDF mirroring generateThermal's exact
+    // content/layout) — same idea as InvoicePdfGenerator.generateThermalPreview.
+    // Remove this whole block (through rWrapped/wrapValue below) plus the matching
+    // TEMPORARY markers in DamageController/DamageService/ReturnController/
+    // ReturnService and sfa-mobile's print-preview screens before shipping to production.
+
+    private static final float RECEIPT_WIDTH   = 280f; // ~99mm — narrow "receipt" page
+    private static final float RECEIPT_MARGIN  = 8f;
+    private static final float RECEIPT_FONT_SZ = 6.5f; // fits the same 64-char width as generateThermal's W
+
+    private byte[] generateThermalPreview(NoteData note) throws IOException {
+        CompanyProfileDto profile = companyProfileService.get();
+        final int W = 64;
+
+        int itemCount = note.lines().size();
+        float estimatedHeight = 500f + (itemCount * 20f) + 150f; // fixed content + items + logo
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        Document doc = new Document(new PdfDocument(new PdfWriter(out)),
+                new PageSize(RECEIPT_WIDTH, Math.max(500f, estimatedHeight)));
+        doc.setMargins(RECEIPT_MARGIN, RECEIPT_MARGIN, RECEIPT_MARGIN, RECEIPT_MARGIN);
+
+        PdfFont mono     = PdfFontFactory.createFont(StandardFonts.COURIER);
+        PdfFont monoBold = PdfFontFactory.createFont(StandardFonts.COURIER_BOLD);
+
+        // ── Header ────────────────────────────────────────────────────────────
+        byte[] logoBytes = fetchLogoBytes(profile);
+        if (logoBytes != null) {
+            try {
+                ImageData logoData = ImageDataFactory.create(logoBytes);
+                float scale = Math.min(28f / logoData.getHeight(), (RECEIPT_WIDTH - 2 * RECEIPT_MARGIN) / logoData.getWidth());
+                Image logo = new Image(logoData)
+                        .setWidth(logoData.getWidth() * scale)
+                        .setHeight(logoData.getHeight() * scale)
+                        .setHorizontalAlignment(HorizontalAlignment.CENTER);
+                doc.add(logo);
+            } catch (Exception e) {
+                log.warn("Could not decode logo for {} thermal preview: {}", note.docLabel(), e.toString());
+            }
+        }
+        doc.add(rLine(trunc(profile.companyName(), W), monoBold, RECEIPT_FONT_SZ + 1.5f, TextAlignment.CENTER));
+        doc.add(rLine("", mono));
+
+        String copyLabel = note.printCount() <= 1 ? "**  ORIGINAL  **" : "**  COPY " + (note.printCount() - 1) + "  **";
+        doc.add(rLine(copyLabel, monoBold, RECEIPT_FONT_SZ, TextAlignment.CENTER));
+        doc.add(new Paragraph(note.docLabel()).setFont(monoBold).setFontSize(RECEIPT_FONT_SZ + 2)
+                .setTextAlignment(TextAlignment.CENTER).setMultipliedLeading(1.1f).setMarginBottom(2));
+        doc.add(rLine("", mono));
+        doc.add(rLine("=".repeat(W), mono));
+        doc.add(rLine("", mono));
+
+        // ── Note number / date ────────────────────────────────────────────────
+        String noLabel = note.docLabel().equals("RETURN NOTE") ? "Return No  : " : "Damage No  : ";
+        doc.add(rLine(noLabel + note.noteNumber(), mono));
+        doc.add(rLine("Date       : " + fmtInstant(note.date()), mono));
+        doc.add(rLine("=".repeat(W), mono));
+        doc.add(rLine("", mono));
+
+        // ── Customer / Rep / Order ────────────────────────────────────────────
+        doc.add(rLine("Customer   : " + trunc(note.customerName(), 51), mono));
+        doc.add(rLine("Address    : " + trunc(safe(note.customerAddress(), "—"), 51), mono));
+        doc.add(rLine("Contact No : " + note.customerPhone(), mono));
+        doc.add(rLine((note.docLabel().equals("RETURN NOTE") ? "Sales Rep  : " : "Reported By: ")
+                + trunc(safe(note.repName(), "—"), 51), mono));
+        if (note.orderNumber() != null) {
+            doc.add(rLine("Order No   : " + note.orderNumber(), mono));
+        }
+        doc.add(rLine("=".repeat(W), mono));
+        doc.add(rLine("", mono));
+
+        // ── Items ─────────────────────────────────────────────────────────────
+        doc.add(rLine(pR("No", 2) + " " + pR("Product", 26) + " " + pL("Qty", 6) + " " + pL("Price", 12) + " " + pL("Amount", 15), monoBold));
+        doc.add(rLine("-".repeat(W), mono));
+        int no = 1;
+        for (NoteLine line : note.lines()) {
+            doc.add(rLine(pR(String.valueOf(no++), 2) + " " + pR(trunc(line.productName(), 26), 26) + " "
+                    + pL(line.qty().toPlainString(), 6) + " " + pL(fmtAmount(line.unitPrice()), 12) + " "
+                    + pL(fmtAmount(line.amount()), 15), mono));
+        }
+        doc.add(rLine("=".repeat(W), mono));
+        doc.add(rLine("", mono));
+
+        // ── Total ─────────────────────────────────────────────────────────────
+        int lw = 46, rw = W - lw;
+        doc.add(rLine(pR("Total Value", lw) + pL(fmtAmount(note.total()), rw), monoBold, RECEIPT_FONT_SZ + 1f, TextAlignment.LEFT));
+        doc.add(rLine("=".repeat(W), mono));
+        doc.add(rLine("", mono));
+
+        doc.add(rWrapped(note.reasonLabel() + " : ", safe(note.reasonText(), "—"), W, mono));
+        doc.add(rLine("-".repeat(W), mono));
+        doc.add(rLine("", mono));
+
+        // ── Signatures ────────────────────────────────────────────────────────
+        doc.add(rLine(dots(30), mono));
+        doc.add(rLine("Customer Signature", mono));
+        doc.add(rLine("", mono));
+        doc.add(rLine(dots(30), mono));
+        doc.add(rLine(note.docLabel().equals("RETURN NOTE") ? "Sales Rep Signature" : "Reported By Signature", mono));
+        if (note.repName() != null) {
+            doc.add(rLine(trunc(note.repName(), W), monoBold));
+        }
+
+        doc.close();
+        return out.toByteArray();
+    }
+
+    private Paragraph rLine(String text, PdfFont font) {
+        return rLine(text, font, RECEIPT_FONT_SZ, TextAlignment.LEFT);
+    }
+
+    private Paragraph rLine(String text, PdfFont font, float size, TextAlignment align) {
+        return new Paragraph(text).setFont(font).setFontSize(size)
+                .setTextAlignment(align).setMultipliedLeading(1.1f).setMarginBottom(0);
+    }
+
+    /**
+     * PDF-preview counterpart to wrapLabeledField — see InvoicePdfGenerator's rWrapped
+     * for why continuation lines need a left margin instead of space-indentation here.
+     */
+    private Div rWrapped(String label, String value, int totalWidth, PdfFont font) {
+        List<String> lines = wrapValue(label, value, totalWidth);
+        float indentPt = label.length() * 0.6f * RECEIPT_FONT_SZ;
+        Div div = new Div().setMargin(0);
+        for (int i = 0; i < lines.size(); i++) {
+            Paragraph p = new Paragraph((i == 0 ? label : "") + lines.get(i))
+                    .setFont(font).setFontSize(RECEIPT_FONT_SZ).setMultipliedLeading(1.1f)
+                    .setMarginTop(0).setMarginBottom(0);
+            if (i > 0) p.setMarginLeft(indentPt);
+            div.add(p);
+        }
+        return div;
+    }
+
+    /**
+     * Splits "value" into chunks that each fit within (totalWidth - label.length())
+     * chars, breaking on the last space that fits rather than mid-word. Shared by
+     * wrapLabeledField (ESC/POS) and rWrapped (PDF preview) so the two renderers'
+     * wrap points never drift apart — only how each renders the continuation indent differs.
+     */
+    private List<String> wrapValue(String label, String value, int totalWidth) {
+        int valueWidth = Math.max(10, totalWidth - label.length());
+        String remaining = value == null ? "" : value;
+        List<String> lines = new ArrayList<>();
+        while (remaining.length() > valueWidth) {
+            int breakAt = remaining.lastIndexOf(' ', valueWidth);
+            if (breakAt <= 0) breakAt = valueWidth;
+            lines.add(remaining.substring(0, breakAt).trim());
+            remaining = remaining.substring(breakAt).trim();
+        }
+        lines.add(remaining);
+        return lines;
+    }
+
     // ── Shared helpers (mirroring InvoicePdfGenerator's conventions) ────────────
 
     private Paragraph kvRow(String key, String value, PdfFont bold, PdfFont regular) {
@@ -423,18 +589,12 @@ public class ReturnDamageNoteGenerator {
     private String dots(int n) { return ".".repeat(n); }
 
     private String wrapLabeledField(String label, String value, int totalWidth) {
-        int valueWidth = Math.max(10, totalWidth - label.length());
-        String remaining = value == null ? "" : value;
+        List<String> lines = wrapValue(label, value, totalWidth);
+        String indent = " ".repeat(label.length());
         StringBuilder sb = new StringBuilder();
-        boolean first = true;
-        while (remaining.length() > valueWidth) {
-            int breakAt = remaining.lastIndexOf(' ', valueWidth);
-            if (breakAt <= 0) breakAt = valueWidth;
-            sb.append(first ? label : " ".repeat(label.length())).append(remaining, 0, breakAt).append("\n");
-            remaining = remaining.substring(breakAt).trim();
-            first = false;
+        for (int i = 0; i < lines.size(); i++) {
+            sb.append(i == 0 ? label : indent).append(lines.get(i)).append("\n");
         }
-        sb.append(first ? label : " ".repeat(label.length())).append(remaining).append("\n");
         return sb.toString();
     }
 

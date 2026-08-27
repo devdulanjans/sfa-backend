@@ -63,6 +63,17 @@ public class DamageController {
                 .body(damageService.getThermalBytes(id));
     }
 
+    // TEMPORARY — dev/QA aid for visually verifying the thermal receipt layout without
+    // a physical printer. Remove this endpoint (and DamageService.getThermalPreviewBytes,
+    // ReturnDamageNoteGenerator.generateDamageThermalPreview, and sfa-mobile's damage
+    // print-preview screen) before shipping to production.
+    @GetMapping("/{id}/thermal-preview")
+    public ResponseEntity<byte[]> thermalPreview(@PathVariable UUID id) {
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_PDF)
+                .body(damageService.getThermalPreviewBytes(id));
+    }
+
     @PatchMapping("/{id}/status")
     @PreAuthorize("hasAnyRole('SUPER_ADMIN','SALES_MANAGER')")
     public Damage updateStatus(@PathVariable UUID id, @RequestParam String status) {

@@ -31,6 +31,15 @@ spring:
     enabled: true
     locations: classpath:db/migration
     baseline-on-migrate: true
+    # This DB's flyway_schema_history has V89-V96 applied (an apparently abandoned
+    # multi-tenancy branch) with no matching files anywhere in source control. Once
+    # any local migration numbered beyond that gap exists (e.g. V97), Flyway stops
+    # treating 89-96 as harmless "future" migrations and instead fails validation
+    # with "Detected applied migration not resolved locally" for each of them.
+    # This tells Flyway to tolerate migrations recorded as applied but missing from
+    # disk, without altering flyway_schema_history (that's what `flyway repair`
+    # would do, destructively) or requiring the original V89-96 files to be found.
+    ignore-migration-patterns: "*:missing"
 
   data:
     redis:
