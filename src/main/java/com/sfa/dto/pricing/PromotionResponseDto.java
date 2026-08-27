@@ -24,7 +24,10 @@ public record PromotionResponseDto(
         LocalDate endDate,
         Boolean isActive,
         Instant createdAt,
-        Instant updatedAt
+        Instant updatedAt,
+        UUID tenantId,
+        String tenantCode,
+        String tenantName
 ) {
     public record ProductSummary(UUID id, String name, String productCode) {}
     public record CustomerSummary(UUID id, String name, String customerCode) {}
@@ -54,7 +57,10 @@ public record PromotionResponseDto(
                 p.getEndDate(),
                 p.getIsActive(),
                 p.getCreatedAt(),
-                p.getUpdatedAt()
+                p.getUpdatedAt(),
+                p.getTenant() != null ? p.getTenant().getId() : null,
+                p.getTenant() != null ? p.getTenant().getCode() : null,
+                p.getTenant() != null ? p.getTenant().getName() : null
         );
     }
 }

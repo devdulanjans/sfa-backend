@@ -35,6 +35,16 @@ public class User {
     @Column(name = "password_hash", nullable = false)
     private String passwordHash;
 
+    /** Set by an admin/super-admin reset (never by the user's own self-change) — the
+     *  frontend forces this account to the change-password screen before anything else
+     *  until it's cleared. */
+    @Column(name = "must_change_password", nullable = false)
+    @Builder.Default
+    private Boolean mustChangePassword = false;
+
+    @Column(name = "password_changed_at")
+    private Instant passwordChangedAt;
+
     @ManyToOne(fetch = FetchType.EAGER)
     @JoinColumn(name = "role_id", nullable = false)
     private Role role;
@@ -92,6 +102,25 @@ public class User {
     )
     @Builder.Default
     private Set<CustomerGroup> customerGroups = new HashSet<>();
+
+    /** Channels (tenants) this user may operate in. SUPER_ADMIN/PLATFORM_OWNER
+     *  ignore this — they operate above any single channel. */
+    @JsonIgnore
+    @ManyToMany(fetch = FetchType.LAZY)
+    @JoinTable(
+        name = "user_tenants",
+        joinColumns = @JoinColumn(name = "user_id"),
+        inverseJoinColumns = @JoinColumn(name = "tenant_id")
+    )
+    @Builder.Default
+    private Set<Tenant> tenants = new HashSet<>();
+
+    /** The channel this user lands in after login when they belong to more than one.
+     *  Null for single-channel users (that one channel is used directly) and for
+     *  SUPER_ADMIN/PLATFORM_OWNER. */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "default_tenant_id")
+    private Tenant defaultTenant;
 
     @CreatedDate
     @Column(name = "created_at", nullable = false, updatable = false)

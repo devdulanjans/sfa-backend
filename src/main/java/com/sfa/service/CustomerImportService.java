@@ -127,7 +127,7 @@ public class CustomerImportService {
 
     // ── Import ───────────────────────────────────────────────────────────────
 
-    public CustomerImportResultDto importFromExcel(MultipartFile file) throws IOException {
+    public CustomerImportResultDto importFromExcel(MultipartFile file, UUID actingUserId) throws IOException {
         List<CustomerImportRowResult> errors = new ArrayList<>();
         int totalRows = 0;
         int successCount = 0;
@@ -191,9 +191,9 @@ public class CustomerImportService {
                             blankToNull(location), blankToNull(placeOfSupplier), blankToNull(taxNumber), resolvedTaxType, null, null, resolvedVisibility,
                             creditLimit, creditDays, null,
                             List.of(new AddressRequest(label, addressLine.trim())),
-                            parentCustomerId);
+                            parentCustomerId, null);
 
-                    customerService.create(req);
+                    customerService.create(req, actingUserId);
                     successCount++;
                 } catch (Exception e) {
                     errors.add(new CustomerImportRowResult(excelRowNumber, isBlank(name) ? "—" : name, e.getMessage()));

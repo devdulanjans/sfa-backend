@@ -3,8 +3,11 @@ package com.sfa.service;
 import com.sfa.dto.CompanyProfileDto;
 import com.sfa.dto.CompanyProfileUpdateRequest;
 import com.sfa.entity.CompanyProfile;
+import com.sfa.entity.Tenant;
 import com.sfa.exception.BusinessException;
 import com.sfa.repository.CompanyProfileRepository;
+import com.sfa.repository.TenantRepository;
+import com.sfa.security.TenantContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,11 +25,24 @@ public class CompanyProfileService {
     private static final long   MAX_LOGO_BYTES    = 2L * 1024 * 1024;
 
     private final CompanyProfileRepository companyProfileRepo;
+    private final TenantRepository         tenantRepo;
     private final MinioStorageService      storage;
 
     @Transactional(readOnly = true)
     public CompanyProfileDto get() {
         return CompanyProfileDto.from(getSingleton());
+    }
+
+    /**
+     * Resolves a specific channel's profile explicitly, bypassing the ambient
+     * {@link TenantContext} entirely — for invoice printing, where the details that must
+     * print are the invoice's OWN order's channel, not whichever channel the printing
+     * user's session currently happens to be scoped to (those can differ: a multi-channel
+     * admin printing an older invoice after switching channels, a background regenerate, etc).
+     */
+    @Transactional(readOnly = true)
+    public CompanyProfileDto getForTenant(UUID tenantId) {
+        return CompanyProfileDto.from(findByTenantOrDefault(tenantId));
     }
 
     public CompanyProfileDto update(CompanyProfileUpdateRequest req, UUID userId) {
@@ -38,6 +54,7 @@ public class CompanyProfileService {
         p.setEmail(req.email());
         p.setWebsite(req.website());
         p.setTaxId(req.taxId());
+        p.setRegistrationNumber(req.registrationNumber());
         p.setVatRegistrationNumber(req.vatRegistrationNumber());
         p.setVatRatePct(req.vatRatePct() != null ? req.vatRatePct() : BigDecimal.ZERO);
         p.setBankName(req.bankName());
@@ -79,7 +96,18 @@ public class CompanyProfileService {
 
     @Transactional(readOnly = true)
     public byte[] getLogoBytes() {
-        CompanyProfile p = getSingleton();
+        return getLogoBytes(null);
+    }
+
+    /**
+     * @param tenantId required for the public (unauthenticated) logo endpoint once more than
+     *                 one channel exists — TenantContext isn't populated for anonymous
+     *                 requests, so the caller must say explicitly whose logo it wants.
+     *                 Null falls back to the legacy single-profile lookup.
+     */
+    @Transactional(readOnly = true)
+    public byte[] getLogoBytes(UUID tenantId) {
+        CompanyProfile p = tenantId != null ? findByTenantOrDefault(tenantId) : getSingleton();
         if (p.getLogoObjectPath() == null) {
             throw new BusinessException("No logo has been uploaded");
         }
@@ -105,14 +133,58 @@ public class CompanyProfileService {
         }
     }
 
+    /** Tenant-explicit counterpart to {@link #tryGetLogoBytes()} — see {@link #getForTenant}. */
     @Transactional(readOnly = true)
-    public String getLogoContentType() {
-        return getSingleton().getLogoContentType();
+    public byte[] tryGetLogoBytes(UUID tenantId) {
+        try {
+            return getLogoBytes(tenantId);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
+    @Transactional(readOnly = true)
+    public String getLogoContentType() {
+        return getLogoContentType(null);
+    }
+
+    @Transactional(readOnly = true)
+    public String getLogoContentType(UUID tenantId) {
+        CompanyProfile p = tenantId != null ? findByTenantOrDefault(tenantId) : getSingleton();
+        return p.getLogoContentType();
+    }
+
+    /**
+     * "The" company profile only means something once a channel is active. SUPER_ADMIN's
+     * default platform view is unscoped — without this guard, findFirstByOrderByUpdatedAtDesc()
+     * would silently hand back whichever channel's profile was edited most recently, which
+     * looks like real data but isn't any specific channel's. Callers must enter a channel
+     * first (POST /api/auth/switch-tenant).
+     */
     private CompanyProfile getSingleton() {
+        if (TenantContext.isUnscoped()) {
+            throw new BusinessException("Select a channel first — Company Profile is per-channel.");
+        }
         return companyProfileRepo.findFirstByOrderByUpdatedAtDesc()
                 .orElseGet(() -> companyProfileRepo.save(
                         CompanyProfile.builder().companyName("My Company").build()));
+    }
+
+    /**
+     * Falls back to a default profile instead of throwing, same as {@link #getSingleton()} —
+     * a channel nobody has visited Settings > Company Profile for yet must not hard-fail
+     * invoice/PDF generation. Explicitly loads the named tenant (a real SELECT, not
+     * getReferenceById — see TenantAwareEntityListener's comment on why: the caller reads
+     * this profile's tenant relation back in the same request to build a response DTO) since,
+     * unlike getSingleton(), this can be asked for a channel other than the ambient one.
+     */
+    private CompanyProfile findByTenantOrDefault(UUID tenantId) {
+        return companyProfileRepo.findByTenant_Id(tenantId)
+                .orElseGet(() -> {
+                    Tenant tenant = tenantRepo.findById(tenantId)
+                            .orElseThrow(() -> new BusinessException("Channel not found."));
+                    return companyProfileRepo.save(
+                            CompanyProfile.builder().tenant(tenant).companyName("My Company").build());
+                });
     }
 }

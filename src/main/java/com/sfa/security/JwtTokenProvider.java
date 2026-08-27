@@ -44,13 +44,22 @@ public class JwtTokenProvider {
         this.redis = redis;
     }
 
-    public String generateAccessToken(Authentication auth) {
+    /**
+     * @param tenantId the active channel for this session; null means either
+     *                 unscoped (SUPER_ADMIN/PLATFORM_OWNER) or "not yet chosen"
+     *                 for a multi-channel user — TenantContext tells them apart
+     *                 via the role, not the token.
+     */
+    public String generateAccessToken(Authentication auth, UUID tenantId) {
         UserDetails user = (UserDetails) auth.getPrincipal();
-        return buildToken(user.getUsername(), "ACCESS", accessTokenExpiry);
+        return buildToken(user.getUsername(), "ACCESS", accessTokenExpiry, tenantId);
     }
 
-    public String generateRefreshToken(String username) {
-        String token = buildToken(username, "REFRESH", refreshTokenExpiry);
+    /** Carries the same "tid" claim as the access token so a later /refresh can
+     *  restore whichever channel the user was actively working in — without it,
+     *  refreshing would silently reset a manually-switched session back to default. */
+    public String generateRefreshToken(String username, UUID tenantId) {
+        String token = buildToken(username, "REFRESH", refreshTokenExpiry, tenantId);
         try {
             redis.opsForValue().set(REFRESH_PREFIX + username, token, refreshTokenExpiry, TimeUnit.MILLISECONDS);
         } catch (Exception e) {
@@ -60,20 +69,28 @@ public class JwtTokenProvider {
         return token;
     }
 
-    private String buildToken(String subject, String tokenType, long expiry) {
+    private String buildToken(String subject, String tokenType, long expiry, UUID tenantId) {
         Date now = new Date();
-        return Jwts.builder()
+        var builder = Jwts.builder()
                 .subject(subject)
                 .claim("type", tokenType)
                 .id(UUID.randomUUID().toString())
                 .issuedAt(now)
-                .expiration(new Date(now.getTime() + expiry))
-                .signWith(key)
-                .compact();
+                .expiration(new Date(now.getTime() + expiry));
+        if (tenantId != null) {
+            builder.claim("tid", tenantId.toString());
+        }
+        return builder.signWith(key).compact();
     }
 
     public String getUsernameFromToken(String token) {
         return parseClaims(token).getSubject();
+    }
+
+    /** The active channel claim ("tid") on an access token — null if unscoped or unset. */
+    public UUID getTenantIdFromToken(String token) {
+        String tid = parseClaims(token).get("tid", String.class);
+        return tid != null ? UUID.fromString(tid) : null;
     }
 
     public boolean validateToken(String token) {

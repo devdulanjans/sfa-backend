@@ -17,6 +17,7 @@ import com.sfa.exception.ResourceNotFoundException;
 import com.sfa.repository.CustomerCategoryRepository;
 import com.sfa.repository.CustomerGroupRepository;
 import com.sfa.repository.CustomerRepository;
+import com.sfa.security.TenantGuard;
 import com.sfa.repository.OrderRepository;
 import com.sfa.repository.ProductRepository;
 import jakarta.persistence.EntityManager;
@@ -46,6 +47,7 @@ public class CustomerService {
     private final CustomerGroupRepository customerGroupRepository;
     private final OrderRepository orderRepository;
     private final ProductRepository productRepository;
+    private final TenantAccessService tenantAccessService;
     private final AuditLogService auditLogService;
 
     @PersistenceContext
@@ -152,12 +154,14 @@ public class CustomerService {
     }
 
     @Transactional
-    public CustomerDto create(CreateCustomerRequest req) {
+    public CustomerDto create(CreateCustomerRequest req, UUID actingUserId) {
         if (customerRepository.findByCustomerCode(req.customerCode()).isPresent()) {
             throw new BusinessException("Customer code already exists: " + req.customerCode());
         }
         Customer c = new Customer();
         applyFields(c, req);
+        tenantAccessService.resolveExplicitTenant(req.tenantId(), actingUserId, "customer")
+                .ifPresent(c::setTenant);
         Customer saved = customerRepository.save(c);
         auditLogService.log(null, "CREATE", "Customer", saved.getId(), null, saved);
         return CustomerDto.from(saved);
@@ -365,7 +369,10 @@ public class CustomerService {
     }
 
     private Customer findOrThrow(UUID id) {
-        return customerRepository.findById(id)
+        Customer c = customerRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Customer", id));
+        // @Filter doesn't cover a by-id lookup (only HQL/Criteria queries) — without this,
+        // any channel could fetch/edit another channel's customer by guessing its id.
+        return TenantGuard.requireVisible(c, "Customer", id);
     }
 }

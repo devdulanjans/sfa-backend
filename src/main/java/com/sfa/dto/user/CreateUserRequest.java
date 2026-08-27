@@ -13,5 +13,6 @@ public record CreateUserRequest(
         List<UUID> distributorIds,
         List<UUID> customerIds,
         List<UUID> customerGroupIds,
+        List<UUID> tenantIds,
         UUID customerId       // for CUSTOMER role: the single customer this user represents
 ) {}

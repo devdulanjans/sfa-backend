@@ -38,6 +38,7 @@ public class LicenseEnforcementAspect {
             case SFA -> licenseService.isSfaEnabled();
             case POS -> licenseService.isPosEnabled();
             case FINANCE -> licenseService.isFinanceEnabled();
+            case MULTI_TENANT -> licenseService.isMultiTenantEnabled();
         };
         if (!enabled) {
             throw new LicenseDeniedException(annotation.value());

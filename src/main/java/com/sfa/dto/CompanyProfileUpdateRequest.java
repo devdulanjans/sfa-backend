@@ -12,6 +12,7 @@ public record CompanyProfileUpdateRequest(
         String email,
         String website,
         String taxId,
+        String registrationNumber,
         String vatRegistrationNumber,
         BigDecimal vatRatePct,
         String bankName,

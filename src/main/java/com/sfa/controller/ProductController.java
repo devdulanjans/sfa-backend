@@ -2,6 +2,7 @@ package com.sfa.controller;
 
 import com.sfa.dto.product.CreateProductRequest;
 import com.sfa.dto.product.ProductDto;
+import com.sfa.security.UserDetailsImpl;
 import com.sfa.service.ProductService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -10,6 +11,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.net.URI;
@@ -43,8 +45,9 @@ public class ProductController {
 
     @PostMapping
     @PreAuthorize("hasAnyRole('SUPER_ADMIN','SALES_MANAGER')")
-    public ResponseEntity<ProductDto> create(@Valid @RequestBody CreateProductRequest req) {
-        ProductDto dto = productService.create(req);
+    public ResponseEntity<ProductDto> create(@Valid @RequestBody CreateProductRequest req,
+                                              @AuthenticationPrincipal UserDetailsImpl principal) {
+        ProductDto dto = productService.create(req, principal.getId());
         return ResponseEntity.created(URI.create("/api/products/" + dto.id())).body(dto);
     }
 

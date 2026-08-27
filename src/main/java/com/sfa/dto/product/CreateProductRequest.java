@@ -14,5 +14,8 @@ public record CreateProductRequest(
         @NotNull @DecimalMin("0") BigDecimal defaultPrice,
         @NotNull @DecimalMin("0") BigDecimal purchasePrice,
         @DecimalMin("0") @DecimalMax("100") BigDecimal taxRate,
-        @DecimalMin("0") BigDecimal maxDiscountAmount
+        @DecimalMin("0") BigDecimal maxDiscountAmount,
+        /** Only consulted when the caller is unscoped (SUPER_ADMIN's platform view) —
+         *  ignored otherwise, since a scoped session's own channel always wins. */
+        UUID tenantId
 ) {}

@@ -5,6 +5,7 @@ import com.sfa.entity.Role;
 import com.sfa.entity.User;
 import com.sfa.repository.OrderRepository;
 import com.sfa.repository.UserRepository;
+import com.sfa.security.TenantContext;
 import com.sfa.security.UserDetailsImpl;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -147,9 +148,10 @@ public class DashboardController {
     // ── Private helpers ───────────────────────────────────────────────────────
 
     private List<DashboardDto.DailyPoint> buildDailyRevenue(UUID repId, Instant from, Instant to) {
+        UUID tenantId = TenantContext.getTenantId();
         List<Object[]> raw = repId != null
-                ? orderRepo.dailyRevenueByRepRaw(repId, from, to)
-                : orderRepo.dailyRevenueRaw(from, to);
+                ? orderRepo.dailyRevenueByRepRaw(repId, from, to, tenantId)
+                : orderRepo.dailyRevenueRaw(from, to, tenantId);
         return raw.stream().map(r -> new DashboardDto.DailyPoint(
                 String.valueOf(r[0]),
                 r[1] instanceof BigDecimal bd ? bd
@@ -169,9 +171,10 @@ public class DashboardController {
     }
 
     private List<DashboardDto.TopCustomer> buildTopCustomers(UUID repId, Instant from, Instant to) {
+        UUID tenantId = TenantContext.getTenantId();
         List<Object[]> raw = repId != null
-                ? orderRepo.topCustomersByRepRaw(repId, from, to)
-                : orderRepo.topCustomersAllRaw(from, to);
+                ? orderRepo.topCustomersByRepRaw(repId, from, to, tenantId)
+                : orderRepo.topCustomersAllRaw(from, to, tenantId);
         return raw.stream().map(r -> new DashboardDto.TopCustomer(
                 String.valueOf(r[0]),
                 r[1] instanceof BigDecimal bd ? bd
@@ -181,9 +184,10 @@ public class DashboardController {
     }
 
     private List<DashboardDto.RecentOrder> buildRecentOrders(UUID repId) {
+        UUID tenantId = TenantContext.getTenantId();
         List<Object[]> raw = repId != null
-                ? orderRepo.recentOrdersByRepRaw(repId)
-                : orderRepo.recentOrdersAllRaw();
+                ? orderRepo.recentOrdersByRepRaw(repId, tenantId)
+                : orderRepo.recentOrdersAllRaw(tenantId);
         return raw.stream().map(r -> new DashboardDto.RecentOrder(
                 String.valueOf(r[0]),
                 String.valueOf(r[1]),

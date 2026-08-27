@@ -25,5 +25,8 @@ public record CreateCustomerRequest(
         Integer creditDays,
         String source,
         @NotEmpty @Valid List<AddressRequest> addresses,
-        java.util.UUID parentCustomerId
+        java.util.UUID parentCustomerId,
+        /** Only consulted for an actor who may pick a channel explicitly (SUPER_ADMIN,
+         *  or any actor managing more than one channel) — ignored otherwise. */
+        java.util.UUID tenantId
 ) {}

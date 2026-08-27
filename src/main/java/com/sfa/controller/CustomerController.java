@@ -141,8 +141,9 @@ public class CustomerController {
     @PostMapping
     @PreAuthorize("hasAnyRole('SUPER_ADMIN','SALES_MANAGER')")
     @RequiresLicense(LicensedPackage.SFA)
-    public ResponseEntity<CustomerDto> create(@Valid @RequestBody CreateCustomerRequest req) {
-        CustomerDto dto = customerService.create(req);
+    public ResponseEntity<CustomerDto> create(@Valid @RequestBody CreateCustomerRequest req,
+                                               @AuthenticationPrincipal UserDetailsImpl principal) {
+        CustomerDto dto = customerService.create(req, principal.getId());
         return ResponseEntity.created(URI.create("/api/customers/" + dto.id())).body(dto);
     }
 
@@ -183,8 +184,9 @@ public class CustomerController {
     @PostMapping(value = "/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @PreAuthorize("hasAnyRole('SUPER_ADMIN','SALES_MANAGER')")
     @RequiresLicense(LicensedPackage.SFA)
-    public CustomerImportResultDto importCustomers(@RequestParam("file") MultipartFile file) throws IOException {
-        return customerImportService.importFromExcel(file);
+    public CustomerImportResultDto importCustomers(@RequestParam("file") MultipartFile file,
+                                                    @AuthenticationPrincipal UserDetailsImpl principal) throws IOException {
+        return customerImportService.importFromExcel(file, principal.getId());
     }
 
     @PostMapping("/pos")

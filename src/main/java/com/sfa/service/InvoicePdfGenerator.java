@@ -45,6 +45,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
+import java.util.UUID;
 
 @Slf4j
 @Service
@@ -81,6 +82,17 @@ public class InvoicePdfGenerator {
     // so both outputs read the same size.
     private static final int SIGNATURE_MAX_HEIGHT_PX = 50;
 
+    // Blank strip down the left edge of every printed receipt so a hole punch
+    // (for filing invoices in a binder/folder) doesn't go through the text.
+    // Assumes the common 203 DPI thermal-printer resolution (8 dots/mm) — if a
+    // real test print shows this isn't a standard 8mm clearance on the actual
+    // hardware, adjust RECEIPT_LEFT_MARGIN_MM and re-derive the dot value below
+    // (same "confirm against a real print" caveat as the W=64 char width above).
+    private static final float RECEIPT_LEFT_MARGIN_MM = 8f;
+    private static final int   THERMAL_DOTS_PER_MM     = 8; // 203 DPI
+    private static final int   ESC_POS_LEFT_MARGIN_DOTS =
+            Math.round(RECEIPT_LEFT_MARGIN_MM * THERMAL_DOTS_PER_MM);
+
     private static final String[] UNITS = {"", "One", "Two", "Three", "Four", "Five", "Six",
             "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen",
             "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"};
@@ -90,8 +102,8 @@ public class InvoicePdfGenerator {
     // ── A4 PDF (Tax Invoice) ─────────────────────────────────────────────────
 
     public byte[] generate(Invoice invoice, Order order) throws IOException {
-        CompanyProfileDto profile  = companyProfileService.get();
-        byte[]            logoBytes = fetchLogoBytes(profile);
+        CompanyProfileDto profile  = companyProfileService.getForTenant(order.getTenant().getId());
+        byte[]            logoBytes = fetchLogoBytes(profile, order.getTenant().getId());
 
         // "Tax Invoice" only when VAT was actually charged on this invoice — same rule
         // as the ESC/POS generator's isVatInvoice, kept in sync so both formats agree.
@@ -202,6 +214,7 @@ public class InvoicePdfGenerator {
         parties.addCell(new Cell()
                 .add(kvRow("Supplier's TIN :",      safe(stripTinSuffix(profile.taxId()), "—"), bold, regular))
                 .add(kvRow("Supplier's Name :",     profile.companyName(),                  bold, regular))
+                .add(kvRow("Reg. No :",             safe(profile.registrationNumber(), "—"), bold, regular))
                 .add(kvRow("Reg. Address :",        safe(profile.registeredAddress(), "—"), bold, regular))
                 .add(kvRow("Operating Address :",   safe(profile.operatingAddress(), "—"),  bold, regular))
                 .add(kvRow("Contact No / Fax No :", safe(profile.phone(), "—"),             bold, regular))
@@ -379,7 +392,7 @@ public class InvoicePdfGenerator {
     // onto a second line around column ~70). 64 leaves a safe margin.
 
     public byte[] generateEscPos(Invoice invoice, Order order) {
-        CompanyProfileDto profile = companyProfileService.get();
+        CompanyProfileDto profile = companyProfileService.getForTenant(order.getTenant().getId());
 
         final int W = 64;
         final int ADDR_WIDTH = 43; // label is ~21 chars; keeps label+value on one line within W
@@ -397,9 +410,17 @@ public class InvoicePdfGenerator {
         // ── Header — hardware center-alignment only (no manual padding: doing
         // both drifts the text off true center) ─────────────────────────────
         esc(buf, 0x1B, 0x40);
+
+        // GS L — set left margin (dots), so the printer's own centering and every
+        // left-aligned line all shift right together, leaving a clean hole-punch
+        // strip down the left edge instead of only padding some lines with spaces.
+        int nL = ESC_POS_LEFT_MARGIN_DOTS % 256;
+        int nH = ESC_POS_LEFT_MARGIN_DOTS / 256;
+        esc(buf, 0x1D, 0x4C, nL, nH);
+
         esc(buf, 0x1B, 0x61, 0x01);
 
-        byte[] logoBytes = fetchLogoBytes(profile);
+        byte[] logoBytes = fetchLogoBytes(profile, order.getTenant().getId());
         if (logoBytes != null) {
             printLogoEscPos(buf, logoBytes, LOGO_WIDTH_PX);
             txt(buf, "\n");
@@ -447,6 +468,7 @@ public class InvoicePdfGenerator {
         // ── Supplier block ────────────────────────────────────────────────────
         txt(buf, "Supplier's TIN    : " + safe(stripTinSuffix(profile.taxId()), "N/A") + "\n");
         txt(buf, "Supplier's Name   : " + trunc(profile.companyName(), ADDR_WIDTH) + "\n");
+        txt(buf, "Reg. No           : " + safe(profile.registrationNumber(), "—") + "\n");
         txt(buf, wrapLabeledField("Reg. Address      : ", safe(profile.registeredAddress(), "—"), W));
         txt(buf, wrapLabeledField("Operating Address : ", safe(profile.operatingAddress(), "—"), W));
         txt(buf, "Contact No/Fax No : " + safe(profile.phone(), "—") + "\n");
@@ -576,12 +598,19 @@ public class InvoicePdfGenerator {
     // at least that much after margins — the "=".repeat(64)/"-".repeat(64) divider
     // lines have no spaces to wrap on, so an overly-tight width here isn't just a
     // cosmetic overflow, it's unlayoutable and throws at PDF-generation time.
-    private static final float RECEIPT_WIDTH   = 280f; // ~99mm — narrow "receipt" page
-    private static final float RECEIPT_MARGIN  = 8f;
+    // Left margin is wider than the other three sides — mirrors the ESC_POS_LEFT_MARGIN_DOTS
+    // hole-punch strip (generateEscPos above) so the preview actually looks like what will
+    // print, not just the narrow uniform-margin receipt this used to render before that strip
+    // existed. RECEIPT_WIDTH is widened by the same delta so the content-width budget the
+    // comment above warns about (249.6pt minimum) is unchanged — only the left margin grew.
+    private static final float RECEIPT_MARGIN      = 8f;
+    private static final float RECEIPT_LEFT_MARGIN = RECEIPT_MARGIN + 23f; // ~8mm punch clearance
+    private static final float RECEIPT_WIDTH       = 280f + (RECEIPT_LEFT_MARGIN - RECEIPT_MARGIN);
+    private static final float RECEIPT_CONTENT_WIDTH = RECEIPT_WIDTH - RECEIPT_LEFT_MARGIN - RECEIPT_MARGIN;
     private static final float RECEIPT_FONT_SZ = 6.5f; // fits the same 64-char width as generateEscPos's W
 
     public byte[] generateThermalPreview(Invoice invoice, Order order) throws IOException {
-        CompanyProfileDto profile = companyProfileService.get();
+        CompanyProfileDto profile = companyProfileService.getForTenant(order.getTenant().getId());
         final int W = 64;
 
         boolean isVatInvoice = invoice.getTaxTotal() != null
@@ -596,20 +625,20 @@ public class InvoicePdfGenerator {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         Document doc = new Document(new PdfDocument(new PdfWriter(out)),
                 new PageSize(RECEIPT_WIDTH, Math.max(900f, estimatedHeight)));
-        doc.setMargins(RECEIPT_MARGIN, RECEIPT_MARGIN, RECEIPT_MARGIN, RECEIPT_MARGIN);
+        doc.setMargins(RECEIPT_MARGIN, RECEIPT_MARGIN, RECEIPT_MARGIN, RECEIPT_LEFT_MARGIN);
 
         PdfFont mono     = PdfFontFactory.createFont(StandardFonts.COURIER);
         PdfFont monoBold = PdfFontFactory.createFont(StandardFonts.COURIER_BOLD);
 
         // ── Header ────────────────────────────────────────────────────────────
-        byte[] logoBytes = fetchLogoBytes(profile);
+        byte[] logoBytes = fetchLogoBytes(profile, order.getTenant().getId());
         if (logoBytes != null) {
             try {
                 ImageData logoData = ImageDataFactory.create(logoBytes);
                 // Constrain by whichever dimension is tighter — a wide logo scaled only
                 // by height could overflow the narrow receipt width, which (like the
                 // divider lines above) has no way to wrap/break and would fail to lay out.
-                float scale = Math.min(28f / logoData.getHeight(), (RECEIPT_WIDTH - 2 * RECEIPT_MARGIN) / logoData.getWidth());
+                float scale = Math.min(28f / logoData.getHeight(), RECEIPT_CONTENT_WIDTH / logoData.getWidth());
                 Image logo = new Image(logoData)
                         .setWidth(logoData.getWidth() * scale)
                         .setHeight(logoData.getHeight() * scale)
@@ -646,6 +675,7 @@ public class InvoicePdfGenerator {
         // ── Supplier block ────────────────────────────────────────────────────
         doc.add(rLine("Supplier's TIN    : " + safe(stripTinSuffix(profile.taxId()), "N/A"), mono));
         doc.add(rLine("Supplier's Name   : " + trunc(profile.companyName(), 43), mono));
+        doc.add(rLine("Reg. No           : " + safe(profile.registrationNumber(), "—"), mono));
         doc.add(rWrapped("Reg. Address      : ", safe(profile.registeredAddress(), "—"), W, mono));
         doc.add(rWrapped("Operating Address : ", safe(profile.operatingAddress(), "—"), W, mono));
         doc.add(rLine("Contact No/Fax No : " + safe(profile.phone(), "—"), mono));
@@ -791,7 +821,7 @@ public class InvoicePdfGenerator {
             try {
                 byte[] bytes = Base64.getDecoder().decode(base64Signature);
                 ImageData data = ImageDataFactory.create(bytes);
-                float scale = Math.min((RECEIPT_WIDTH - 2 * RECEIPT_MARGIN) / data.getWidth(), 60f / data.getHeight());
+                float scale = Math.min(RECEIPT_CONTENT_WIDTH / data.getWidth(), 60f / data.getHeight());
                 doc.add(new Image(data).setWidth(data.getWidth() * scale).setHeight(data.getHeight() * scale));
                 return;
             } catch (Exception e) {
@@ -1062,13 +1092,14 @@ public class InvoicePdfGenerator {
 
     // ── Common helpers ────────────────────────────────────────────────────────
 
-    private byte[] fetchLogoBytes(CompanyProfileDto profile) {
+    private byte[] fetchLogoBytes(CompanyProfileDto profile, UUID tenantId) {
         if (profile.logoUrl() == null) return null;
-        // tryGetLogoBytes() (not getLogoBytes()) — its own catch lives inside the
+        // tryGetLogoBytes(tenantId) (not getLogoBytes()) — its own catch lives inside the
         // @Transactional method, so a storage failure here can't poison the invoice
         // generation transaction this runs inside of. See its Javadoc for why catching
-        // the exception out here instead wouldn't be enough.
-        return companyProfileService.tryGetLogoBytes();
+        // the exception out here instead wouldn't be enough. Tenant-explicit, same reason
+        // as the profile fetch above: must be the order's own channel's logo.
+        return companyProfileService.tryGetLogoBytes(tenantId);
     }
 
     private String formatRate(BigDecimal rate) {

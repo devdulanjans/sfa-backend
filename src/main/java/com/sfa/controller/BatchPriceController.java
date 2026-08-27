@@ -7,7 +7,9 @@ import com.sfa.entity.*;
 import com.sfa.exception.BusinessException;
 import com.sfa.exception.ResourceNotFoundException;
 import com.sfa.repository.*;
+import com.sfa.security.TenantGuard;
 import com.sfa.security.UserDetailsImpl;
+import com.sfa.service.TenantAccessService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -38,6 +40,7 @@ public class BatchPriceController {
     private final ProductGroupRepository      productGroupRepository;
     private final PromotionRepository         promotionRepository;
     private final PromotionEditLogRepository  editLogRepository;
+    private final TenantAccessService         tenantAccessService;
     private final ObjectMapper                objectMapper;
 
     // ── Batch prices ──────────────────────────────────────────────────────────
@@ -105,9 +108,11 @@ public class BatchPriceController {
 
     @PostMapping("/api/batch-prices")
     @PreAuthorize("hasAnyRole('SUPER_ADMIN','SALES_MANAGER')")
-    public ResponseEntity<BatchPrice> createBatchPrice(@RequestBody Map<String, Object> body) {
+    public ResponseEntity<BatchPrice> createBatchPrice(@RequestBody Map<String, Object> body,
+                                                        @AuthenticationPrincipal UserDetailsImpl principal) {
         BatchPrice bp = new BatchPrice();
         applyBatchPriceBody(bp, body);
+        resolveTenant(body, principal, "batch price").ifPresent(bp::setTenant);
         BatchPrice saved = batchPriceRepository.save(bp);
         return ResponseEntity.created(URI.create("/api/batch-prices/" + saved.getId())).body(saved);
     }
@@ -118,6 +123,7 @@ public class BatchPriceController {
             @PathVariable UUID id, @RequestBody Map<String, Object> body) {
         BatchPrice bp = batchPriceRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("BatchPrice", id));
+        bp = TenantGuard.requireVisible(bp, "BatchPrice", id);
         applyBatchPriceBody(bp, body);
         return ResponseEntity.ok(batchPriceRepository.save(bp));
     }
@@ -174,11 +180,21 @@ public class BatchPriceController {
         return (s == null || s.isBlank()) ? null : s;
     }
 
+    /** Create-time only — an explicit channel from a multi-channel actor's picker (or
+     *  required at all for SUPER_ADMIN's unscoped platform view); empty otherwise, meaning
+     *  the ambient context (TenantAwareEntityListener) stamps it on save() as usual. */
+    private Optional<Tenant> resolveTenant(Map<String, Object> body, UserDetailsImpl principal, String entityLabel) {
+        String raw = blankToNull((String) body.get("tenantId"));
+        UUID requested = raw != null ? UUID.fromString(raw) : null;
+        return tenantAccessService.resolveExplicitTenant(requested, principal.getId(), entityLabel);
+    }
+
     @DeleteMapping("/api/batch-prices/{id}")
     @PreAuthorize("hasAnyRole('SUPER_ADMIN','SALES_MANAGER')")
     public ResponseEntity<Void> deleteBatchPrice(@PathVariable UUID id) {
-        batchPriceRepository.findById(id)
+        BatchPrice bp = batchPriceRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("BatchPrice", id));
+        TenantGuard.requireVisible(bp, "BatchPrice", id);
         batchPriceRepository.deleteById(id);
         return ResponseEntity.noContent().build();
     }
@@ -237,9 +253,11 @@ public class BatchPriceController {
 
     @PostMapping("/api/promotions")
     @PreAuthorize("hasAnyRole('SUPER_ADMIN','SALES_MANAGER')")
-    public ResponseEntity<PromotionResponseDto> createPromotion(@RequestBody Map<String, Object> body) {
+    public ResponseEntity<PromotionResponseDto> createPromotion(@RequestBody Map<String, Object> body,
+                                                                 @AuthenticationPrincipal UserDetailsImpl principal) {
         Promotion promo = new Promotion();
         applyPromotionBody(promo, body);
+        resolveTenant(body, principal, "promotion").ifPresent(promo::setTenant);
         Promotion saved = promotionRepository.save(promo);
         return ResponseEntity.created(URI.create("/api/promotions/" + saved.getId()))
                 .body(PromotionResponseDto.from(saved));
@@ -254,6 +272,7 @@ public class BatchPriceController {
 
         Promotion promo = promotionRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Promotion", id));
+        promo = TenantGuard.requireVisible(promo, "Promotion", id);
 
         // ── Snapshot before ───────────────────────────────────────────────────
         String        beforeName   = promo.getName();

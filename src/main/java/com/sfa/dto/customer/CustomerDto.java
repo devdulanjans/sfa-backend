@@ -32,7 +32,10 @@ public record CustomerDto(
         Instant deletedAt,
         UUID parentCustomerId,
         String parentCustomerName,
-        int branchCount
+        int branchCount,
+        UUID tenantId,
+        String tenantCode,
+        String tenantName
 ) {
     public static CustomerDto from(Customer c) {
         List<UUID> productIds = Hibernate.isInitialized(c.getAssignedProducts())
@@ -111,7 +114,10 @@ public record CustomerDto(
                 c.getDeletedAt(),
                 parentId,
                 parentCustomerName,
-                branchCount
+                branchCount,
+                c.getTenant() != null ? c.getTenant().getId() : null,
+                c.getTenant() != null ? c.getTenant().getCode() : null,
+                c.getTenant() != null ? c.getTenant().getName() : null
         );
     }
 }

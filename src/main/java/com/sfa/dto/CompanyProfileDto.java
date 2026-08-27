@@ -16,6 +16,7 @@ public record CompanyProfileDto(
         String email,
         String website,
         String taxId,
+        String registrationNumber,
         String vatRegistrationNumber,
         BigDecimal vatRatePct,
         String bankName,
@@ -29,13 +30,16 @@ public record CompanyProfileDto(
         return new CompanyProfileDto(
                 p.getId(),
                 p.getCompanyName(),
-                p.getLogoObjectPath() != null ? "/api/company-profile/logo" : null,
+                p.getLogoObjectPath() != null
+                        ? "/api/company-profile/logo?tenantId=" + p.getTenant().getId()
+                        : null,
                 p.getRegisteredAddress(),
                 p.getOperatingAddress(),
                 p.getPhone(),
                 p.getEmail(),
                 p.getWebsite(),
                 p.getTaxId(),
+                p.getRegistrationNumber(),
                 p.getVatRegistrationNumber(),
                 p.getVatRatePct(),
                 p.getBankName(),

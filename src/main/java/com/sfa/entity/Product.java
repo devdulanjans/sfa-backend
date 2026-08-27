@@ -3,9 +3,11 @@ package com.sfa.entity;
 import jakarta.persistence.*;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.*;
+import org.hibernate.annotations.Filter;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
+import com.sfa.security.TenantAwareEntityListener;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -17,17 +19,25 @@ import java.util.UUID;
 @Table(name = "products", indexes = {
     @Index(name = "idx_products_code",     columnList = "product_code"),
     @Index(name = "idx_products_status",   columnList = "status"),
-    @Index(name = "idx_products_category", columnList = "category_id")
+    @Index(name = "idx_products_category", columnList = "category_id"),
+    @Index(name = "idx_products_tenant",   columnList = "tenant_id")
+}, uniqueConstraints = {
+    @UniqueConstraint(name = "uk_products_tenant_code", columnNames = {"tenant_id", "product_code"})
 })
-@EntityListeners(AuditingEntityListener.class)
+@EntityListeners({AuditingEntityListener.class, TenantAwareEntityListener.class})
+@Filter(name = "tenantFilter", condition = "tenant_id = :tenantId")
 @Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor
-public class Product {
+public class Product implements TenantScoped {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    @Column(name = "product_code", nullable = false, unique = true, length = 30)
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "tenant_id", nullable = false)
+    private Tenant tenant;
+
+    @Column(name = "product_code", nullable = false, length = 30)
     private String productCode;
 
     @Column(length = 64)

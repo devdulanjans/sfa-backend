@@ -7,6 +7,7 @@ import com.sfa.entity.*;
 import com.sfa.exception.BusinessException;
 import com.sfa.exception.ResourceNotFoundException;
 import com.sfa.repository.*;
+import com.sfa.security.TenantGuard;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -70,6 +71,9 @@ public class OrderService {
 
         Customer customer = customerRepo.findById(customerId)
                 .orElseThrow(() -> new ResourceNotFoundException("Customer", customerId));
+        // @Filter doesn't cover a by-id lookup — without this, a channel-scoped rep could
+        // place an order against another channel's customer by guessing its id.
+        customer = TenantGuard.requireVisible(customer, "Customer", customerId);
 
         if (Role.SALES_REP.equals(salesRep.getRole().getName())) {
             Set<UUID> assignedIds = salesRep.getAssignedCustomers().stream()
@@ -106,6 +110,7 @@ public class OrderService {
         for (OrderItemRequest itemReq : request.items()) {
             Product product = productRepo.findById(itemReq.productId())
                     .orElseThrow(() -> new ResourceNotFoundException("Product", itemReq.productId()));
+            product = TenantGuard.requireVisible(product, "Product", itemReq.productId());
 
             PricingEngine.LineItemResult line = pricingEngine.calculateLine(
                     itemReq.productId(),
@@ -317,8 +322,11 @@ public class OrderService {
 
     @Transactional(readOnly = true)
     public Order getOrder(UUID id) {
-        return orderRepo.findById(id)
+        Order order = orderRepo.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Order", id));
+        // @Filter doesn't cover a by-id lookup (only HQL/Criteria queries) — without this,
+        // any channel could fetch/submit/approve/cancel another channel's order by guessing its id.
+        return TenantGuard.requireVisible(order, "Order", id);
     }
 
     private void validateOwnership(Order order, UUID userId) {
