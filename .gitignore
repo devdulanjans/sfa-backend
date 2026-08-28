@@ -38,3 +38,6 @@ target/
 *.pem
 *.p12
 *.jks
+
+### Database backups (may contain customer data) ###
+db-backups/

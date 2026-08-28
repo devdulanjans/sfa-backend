@@ -19,6 +19,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -114,7 +115,11 @@ public class ProductService {
     }
 
     private void applyFields(Product p, CreateProductRequest req) {
-        if (req.maxDiscountAmount() != null && req.maxDiscountAmount().compareTo(req.defaultPrice()) >= 0) {
+        // A max discount of exactly 0 ("no discount allowed") is always valid regardless of
+        // price — including a not-yet-priced (0.00) product. Only a genuine positive discount
+        // needs to stay strictly below the selling price, or it could zero out (or exceed) it.
+        if (req.maxDiscountAmount() != null && req.maxDiscountAmount().compareTo(BigDecimal.ZERO) > 0
+                && req.maxDiscountAmount().compareTo(req.defaultPrice()) >= 0) {
             throw new BusinessException("Max discount must be less than the product's selling price");
         }
 
