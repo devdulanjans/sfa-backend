@@ -5,9 +5,6 @@ import com.sfa.entity.ChartOfAccount;
 import com.sfa.entity.Invoice;
 import com.sfa.entity.JournalEntry;
 import com.sfa.entity.Order;
-import com.sfa.entity.OrderItem;
-import com.sfa.entity.Product;
-import com.sfa.entity.ProductCategory;
 import com.sfa.exception.BusinessException;
 import com.sfa.exception.ResourceNotFoundException;
 import com.sfa.repository.ChartOfAccountRepository;
@@ -334,29 +331,16 @@ public class InvoiceService {
     }
 
     /**
-     * Category code (e.g. "IT" for Iceman Products, "YA" for Yara Product) of the first
-     * item added to the cart, concatenated with the first letter of the customer's location
-     * (e.g. "Kandy" -> "K"). Falls back to "IT" when the category has no code set, and "X"
-     * when the customer has no location — invoice numbering must never fail on missing data.
+     * Fixed "IT" code concatenated with the first letter of the customer's location
+     * (e.g. "Kandy" -> "K"). Falls back to "X" when the customer has no location —
+     * invoice numbering must never fail on missing data.
      */
     private String resolveInvoiceCode(Order order) {
-        String categoryCode = order.getItems().stream()
-                .findFirst()
-                .map(OrderItem::getProduct)
-                .map(Product::getCategory)
-                .map(ProductCategory::getCode)
-                .filter(c -> c != null && !c.isBlank())
-                .orElse("IT")
-                .trim().toUpperCase(Locale.ENGLISH);
-        // Cap so a future admin-entered code (up to 10 chars) can never push the
-        // whole invoice number past its 20-char column limit.
-        categoryCode = categoryCode.substring(0, Math.min(categoryCode.length(), 6));
-
         String location = order.getCustomer().getLocation();
         String locationLetter = (location != null && !location.isBlank())
                 ? location.trim().substring(0, 1).toUpperCase(Locale.ENGLISH)
                 : "X";
 
-        return categoryCode + locationLetter;
+        return "IT" + locationLetter;
     }
 }
