@@ -55,10 +55,9 @@ import java.util.List;
  * return or a damaged-stock report — a lightweight goods-movement document (product,
  * quantity, unit price, amount), styled after {@link InvoicePdfGenerator}'s A4/ESC-POS
  * layout (same header, ORIGINAL/COPY-N labeling, items table, signatures) but without
- * any tax/payment section since these aren't billing documents. Return/Damage line
- * items don't store their own price (see ReturnItem/DamageItem), so the unit price
- * and amount shown here are derived at print time from the product's current
- * {@link Product#getDefaultPrice()} — not a price frozen at the time of the return.
+ * any tax/payment section since these aren't billing documents. Return/Damage notes
+ * are not billing documents, so unit price and amount are always printed as zero
+ * regardless of the product's {@link Product#getDefaultPrice()} — only quantity matters.
  */
 @Slf4j
 @Service
@@ -146,16 +145,14 @@ public class ReturnDamageNoteGenerator {
 
     private NoteLine toLine(com.sfa.entity.ReturnItem item) {
         Product p = item.getProduct();
-        BigDecimal price = p.getDefaultPrice() != null ? p.getDefaultPrice() : BigDecimal.ZERO;
         return new NoteLine(p.getName(), p.getProductCode(), item.getQuantity(),
-                price, price.multiply(item.getQuantity()));
+                BigDecimal.ZERO, BigDecimal.ZERO);
     }
 
     private NoteLine toLine(com.sfa.entity.DamageItem item) {
         Product p = item.getProduct();
-        BigDecimal price = p.getDefaultPrice() != null ? p.getDefaultPrice() : BigDecimal.ZERO;
         return new NoteLine(p.getName(), p.getProductCode(), item.getQuantity(),
-                price, price.multiply(item.getQuantity()));
+                BigDecimal.ZERO, BigDecimal.ZERO);
     }
 
     // ── A4 PDF ────────────────────────────────────────────────────────────────

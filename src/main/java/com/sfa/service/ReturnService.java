@@ -16,6 +16,8 @@ import com.sfa.repository.ProductRepository;
 import com.sfa.repository.ReturnRepository;
 import com.sfa.repository.UserRepository;
 import com.sfa.security.UserDetailsImpl;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -24,18 +26,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
-import java.time.LocalDate;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
 public class ReturnService {
-
-    private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
 
     private final ReturnRepository returnRepository;
     private final OrderRepository orderRepository;
@@ -43,6 +41,9 @@ public class ReturnService {
     private final ProductRepository productRepository;
     private final UserRepository userRepository;
     private final ReturnDamageNoteGenerator noteGenerator;
+
+    @PersistenceContext
+    private EntityManager em;
 
     @Transactional(readOnly = true)
     public Return getById(UUID id) {
@@ -117,7 +118,7 @@ public class ReturnService {
                 .orElseThrow(() -> new ResourceNotFoundException("User", principal.getId()));
 
         Return ret = new Return();
-        ret.setReturnNumber(generateReturnNumber());
+        ret.setReturnNumber(generateReturnNumber(customer));
         ret.setCustomer(customer);
         ret.setOrder(order);
         ret.setSalesRep(salesRep);
@@ -140,10 +141,21 @@ public class ReturnService {
         return returnRepository.save(ret);
     }
 
-    private String generateReturnNumber() {
-        String date   = LocalDate.now(ZoneId.of("UTC")).format(DATE_FMT);
-        String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, 6).toUpperCase();
-        return "RET-" + date + "-" + suffix;
+    private String generateReturnNumber(Customer customer) {
+        long seq = ((Number) em.createNativeQuery("SELECT NEXTVAL('return_number_seq')").getSingleResult()).longValue();
+        return "RTN_IT" + resolveLocationLetter(customer) + "_" + "%05d".formatted(seq);
+    }
+
+    /**
+     * First letter of the customer's location (e.g. "Kandy" -> "K"), falling back to
+     * "X" when missing — mirrors InvoiceService's resolveInvoiceCode so numbering
+     * never fails on missing data.
+     */
+    private String resolveLocationLetter(Customer customer) {
+        String location = customer.getLocation();
+        return (location != null && !location.isBlank())
+                ? location.trim().substring(0, 1).toUpperCase(Locale.ENGLISH)
+                : "X";
     }
 
     @Transactional

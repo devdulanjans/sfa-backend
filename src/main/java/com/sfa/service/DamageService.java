@@ -14,6 +14,8 @@ import com.sfa.repository.DamageRepository;
 import com.sfa.repository.ProductRepository;
 import com.sfa.repository.UserRepository;
 import com.sfa.security.UserDetailsImpl;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -22,24 +24,23 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
-import java.time.LocalDate;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
 public class DamageService {
 
-    private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
-
     private final DamageRepository damageRepository;
     private final CustomerRepository customerRepository;
     private final ProductRepository productRepository;
     private final UserRepository userRepository;
     private final ReturnDamageNoteGenerator noteGenerator;
+
+    @PersistenceContext
+    private EntityManager em;
 
     @Transactional(readOnly = true)
     public Damage getById(UUID id) {
@@ -104,7 +105,7 @@ public class DamageService {
                 .orElseThrow(() -> new ResourceNotFoundException("User", principal.getId()));
 
         Damage damage = new Damage();
-        damage.setDamageNumber(generateDamageNumber());
+        damage.setDamageNumber(generateDamageNumber(customer));
         damage.setCustomer(customer);
         damage.setReportedBy(reporter);
         damage.setDescription(req.description());
@@ -126,10 +127,21 @@ public class DamageService {
         return damageRepository.save(damage);
     }
 
-    private String generateDamageNumber() {
-        String date   = LocalDate.now(ZoneId.of("UTC")).format(DATE_FMT);
-        String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, 6).toUpperCase();
-        return "DMG-" + date + "-" + suffix;
+    private String generateDamageNumber(Customer customer) {
+        long seq = ((Number) em.createNativeQuery("SELECT NEXTVAL('damage_number_seq')").getSingleResult()).longValue();
+        return "DMG_IT" + resolveLocationLetter(customer) + "_" + "%05d".formatted(seq);
+    }
+
+    /**
+     * First letter of the customer's location (e.g. "Kandy" -> "K"), falling back to
+     * "X" when missing — mirrors InvoiceService's resolveInvoiceCode so numbering
+     * never fails on missing data.
+     */
+    private String resolveLocationLetter(Customer customer) {
+        String location = customer.getLocation();
+        return (location != null && !location.isBlank())
+                ? location.trim().substring(0, 1).toUpperCase(Locale.ENGLISH)
+                : "X";
     }
 
     @Transactional
