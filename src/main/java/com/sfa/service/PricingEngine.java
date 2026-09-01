@@ -68,14 +68,28 @@ public class PricingEngine {
         return resolve(productId, customerId, BigDecimal.ONE);
     }
 
-    /**
-     * Priority: customer price → promotion → general batch → default. Both the customer-specific
-     * and general batch-price steps are tier-aware: when a product has multiple qty-gated tiers
-     * (e.g. a customer with several {@code BatchPrice} rows at increasing {@code minQty}), the
-     * tier whose {@code minQty} is the highest one satisfied by {@code qty} wins — not just
-     * whichever row happens to have the latest {@code startDate}.
-     */
+    /** Convenience overload for callers with no explicit tier selection — see {@link #resolve(UUID, UUID, BigDecimal, UUID)}. */
     public PriceResult resolve(UUID productId, UUID customerId, BigDecimal qty) {
+        return resolve(productId, customerId, qty, null);
+    }
+
+    /**
+     * Priority: explicit tier → customer price → promotion → general batch → default. Both the
+     * customer-specific and general batch-price steps are tier-aware: when a product has multiple
+     * qty-gated tiers (e.g. a customer with several {@code BatchPrice} rows at increasing
+     * {@code minQty}), the tier whose {@code minQty} is the highest one satisfied by {@code qty}
+     * wins — not just whichever row happens to have the latest {@code startDate}.
+     *
+     * @param batchPriceId optional id of a specific {@code BatchPrice} row the caller already
+     *                      selected (e.g. a rep picking a tier in the mobile price-tier sheet).
+     *                      When present and still valid for this product/customer/qty/date, it is
+     *                      used verbatim rather than re-deriving "the best" match — several batch
+     *                      price rows scoped to the same product group + customer group can be
+     *                      equally specific (a tie the "best match" query breaks arbitrarily), so
+     *                      honoring the caller's actual selection is the only way to guarantee the
+     *                      charged price matches the price the user was shown and picked.
+     */
+    public PriceResult resolve(UUID productId, UUID customerId, BigDecimal qty, UUID batchPriceId) {
         LocalDate today   = LocalDate.now();
         BigDecimal q      = qty != null ? qty : BigDecimal.ONE;
         Product   product = productRepo.findById(productId).orElseThrow();
@@ -100,6 +114,22 @@ public class PricingEngine {
                             maxFree, minOrdQty, applicableIds);
                 })
                 .orElse(null);
+
+        // 0. Explicit tier the caller already selected — see the batchPriceId javadoc above.
+        if (batchPriceId != null) {
+            Optional<BatchPrice> explicit =
+                    batchPriceRepo.findValidForOrder(batchPriceId, productId, customerId, q, today);
+            if (explicit.isPresent()) {
+                BatchPrice bp = explicit.get();
+                String source = (bp.getCustomer() != null || bp.getCustomerGroup() != null)
+                        ? "CUSTOMER_PRICE" : "BATCH_PRICE";
+                return new PriceResult(bp.getPrice(), source,
+                        null, product.getMaxDiscountAmount(), taxPct, freeInfo);
+            }
+            // Falls through to normal resolution below if the id no longer validates (e.g. the
+            // tier expired between the client fetching it and submitting the order) — never
+            // trust an unvalidated client-supplied price.
+        }
 
         // 1. Customer-specific batch price (best tier for this qty)
         Optional<BatchPrice> customerPrice =
@@ -142,7 +172,12 @@ public class PricingEngine {
 
     public LineItemResult calculateLine(UUID productId, UUID customerId,
                                         BigDecimal qty, BigDecimal requestedDiscountPct) {
-        PriceResult base    = resolve(productId, customerId, qty);
+        return calculateLine(productId, customerId, qty, requestedDiscountPct, null);
+    }
+
+    public LineItemResult calculateLine(UUID productId, UUID customerId, BigDecimal qty,
+                                        BigDecimal requestedDiscountPct, UUID batchPriceId) {
+        PriceResult base    = resolve(productId, customerId, qty, batchPriceId);
         Product     product = productRepo.findById(productId).orElseThrow();
 
         // maxDiscountAmount is a fixed per-unit Rs cap, not a percentage — convert the requested

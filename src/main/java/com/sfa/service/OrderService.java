@@ -111,7 +111,8 @@ public class OrderService {
                     itemReq.productId(),
                     customerId,
                     itemReq.quantity(),
-                    itemReq.discountPct());
+                    itemReq.discountPct(),
+                    itemReq.batchPriceId());
 
             OrderItem item = OrderItem.builder()
                     .product(product)

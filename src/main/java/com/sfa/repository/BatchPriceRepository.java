@@ -79,6 +79,38 @@ public interface BatchPriceRepository extends JpaRepository<BatchPrice, UUID> {
             @Param("productId") UUID productId, @Param("customerId") UUID customerId,
             @Param("qty") BigDecimal qty, @Param("date") LocalDate date);
 
+    /**
+     * Validates a client-supplied batch price id (e.g. the tier a rep picked in the mobile
+     * price-tier sheet) against the same visibility rules as {@link #findBestCustomerBatchPrice}
+     * / the general equivalent — product (direct or group), customer (direct, group, or fully
+     * general), active date range, and min-qty. Used so order creation can honor the exact tier
+     * the client selected instead of independently re-deriving "the best" match, which is
+     * ambiguous — and therefore not guaranteed to agree with the client's choice — whenever a
+     * product/customer-group pairing has multiple equally-specific active batch price rows.
+     */
+    @Query("""
+        SELECT bp FROM BatchPrice bp
+        LEFT JOIN bp.product p
+        LEFT JOIN bp.customer c
+        WHERE bp.id = :batchPriceId
+          AND (p.id = :productId
+               OR (bp.productGroup IS NOT NULL AND EXISTS (
+                   SELECT 1 FROM ProductGroup pg JOIN pg.members pm
+                   WHERE pg = bp.productGroup AND pm.id = :productId)))
+          AND ((bp.customer IS NULL AND bp.customerGroup IS NULL)
+               OR c.id = :customerId
+               OR (bp.customerGroup IS NOT NULL AND EXISTS (
+                   SELECT 1 FROM CustomerGroup cg JOIN cg.members cm
+                   WHERE cg = bp.customerGroup AND cm.id = :customerId)))
+          AND bp.startDate <= :date
+          AND (bp.endDate IS NULL OR bp.endDate >= :date)
+          AND (bp.minQty IS NULL OR bp.minQty <= :qty)
+    """)
+    Optional<BatchPrice> findValidForOrder(
+            @Param("batchPriceId") UUID batchPriceId, @Param("productId") UUID productId,
+            @Param("customerId") UUID customerId, @Param("qty") BigDecimal qty,
+            @Param("date") LocalDate date);
+
     /** General-tier equivalent of {@link #findBestCustomerBatchPrice} — no customer or customer
      *  group targeting at all (applies to every customer), matched against the product side
      *  (direct or group) as above. */
