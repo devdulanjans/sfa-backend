@@ -325,9 +325,9 @@ public class InvoiceService {
     private String generateInvoiceNumber(Order order) {
         long seq = ((Number) em.createNativeQuery("SELECT NEXTVAL('invoice_number_seq')").getSingleResult()).longValue();
         LocalDate today = LocalDate.now();
-        String yy  = "%02d".formatted(today.getYear() % 100);
+        String dd  = "%02d".formatted(today.getDayOfMonth());
         String mon = today.getMonth().getDisplayName(TextStyle.SHORT, Locale.ENGLISH).toUpperCase(Locale.ENGLISH);
-        return yy + mon + "_" + resolveInvoiceCode(order) + "_" + "%05d".formatted(seq);
+        return dd + mon + "_" + resolveInvoiceCode(order) + "_" + "%05d".formatted(seq);
     }
 
     /**
