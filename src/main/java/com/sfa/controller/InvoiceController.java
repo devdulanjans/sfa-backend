@@ -183,6 +183,41 @@ public class InvoiceController {
                 .body(bytes);
     }
 
+    @GetMapping("/{id}/export-secondary-sales")
+    @Operation(summary = "Export this invoice in the Secondary Sales Data template (one row per product line)")
+    public ResponseEntity<byte[]> exportSecondarySales(@PathVariable UUID id) throws IOException {
+        byte[] bytes = detailedExportGenerator.generateSecondarySalesExcel(invoiceService.getInvoice(id));
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"invoice-secondary-sales.xlsx\"")
+                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(bytes);
+    }
+
+    @GetMapping("/export-secondary-sales")
+    @Operation(summary = "Bulk-export every invoice matching the given filters in the Secondary Sales Data template")
+    public ResponseEntity<byte[]> exportSecondarySalesBulk(
+            @AuthenticationPrincipal UserDetailsImpl user,
+            @RequestParam(required = false) String invoiceNo,
+            @RequestParam(required = false) String orderNo,
+            @RequestParam(required = false) UUID customerId,
+            @RequestParam(required = false) UUID salesRepId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createdFrom,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createdTo,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate issuedFrom,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate issuedTo,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dueFrom,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dueTo) throws IOException {
+
+        InvoiceFilter filter = buildFilter(user, invoiceNo, orderNo, customerId, salesRepId,
+                createdFrom, createdTo, issuedFrom, issuedTo, dueFrom, dueTo);
+        var invoices = invoiceService.getInvoicesForExport(filter);
+        byte[] bytes = detailedExportGenerator.generateSecondarySalesExcel(invoices);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"invoices-secondary-sales.xlsx\"")
+                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(bytes);
+    }
+
     @GetMapping("/by-order/{orderId}")
     @Operation(summary = "Get invoice for an order")
     public ResponseEntity<Invoice> getByOrder(@PathVariable UUID orderId) {

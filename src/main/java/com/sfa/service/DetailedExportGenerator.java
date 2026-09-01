@@ -2,10 +2,13 @@ package com.sfa.service;
 
 import com.sfa.entity.Customer;
 import com.sfa.entity.CustomerAddress;
+import com.sfa.entity.Distributor;
 import com.sfa.entity.Invoice;
 import com.sfa.entity.Order;
 import com.sfa.entity.OrderItem;
 import com.sfa.entity.Product;
+import com.sfa.entity.User;
+import lombok.RequiredArgsConstructor;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.stereotype.Service;
@@ -30,9 +33,13 @@ import java.util.List;
  * into one shared sheet.
  */
 @Service
+@RequiredArgsConstructor
 public class DetailedExportGenerator {
 
+    private final CompanyProfileService companyProfileService;
+
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+    private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("HH:mm:ss");
 
     private static final String[] HEADERS = {
             "Order #", "Invoice #", "Order Date", "Invoice Date", "Due Date", "Status",
@@ -41,6 +48,20 @@ public class DetailedExportGenerator {
             "Product Code", "Product Name", "Quantity", "Unit", "Unit Price",
             "Discount %", "Discount Amount", "Tax %", "Tax Amount", "Line Total", "Price Source",
             "Order Subtotal", "Order Discount Total", "Order Tax Total", "Order Grand Total"
+    };
+
+    /**
+     * Standard "Secondary Sales Data" template used by external distributor-management
+     * integrations — one row per product line. Several columns (RouteCode, RouteName,
+     * CommonOutletCode, vol, Method) have no backing data anywhere in this system and are
+     * always left blank rather than guessed.
+     */
+    private static final String[] SECONDARY_SALES_HEADERS = {
+            "Date", "Time", "Longitude", "Latitude", "Company",
+            "DistributorCode", "DistributorName", "DSRId", "DSRName",
+            "RouteCode", "RouteName", "OutletCode", "OutletName", "CommonOutletCode",
+            "SerialNo", "Type", "Method", "ItemId", "ItemName", "SalesQty", "vol",
+            "DiscountValue", "FreeIssueValue", "NetSalesValue"
     };
 
     private record Entry(Order order, String invoiceNumber, LocalDate issuedDate, LocalDate dueDate,
@@ -165,6 +186,113 @@ public class DetailedExportGenerator {
         return r;
     }
 
+    public byte[] generateSecondarySalesExcel(Invoice invoice) throws IOException {
+        return generateSecondarySalesExcel(List.of(invoice));
+    }
+
+    public byte[] generateSecondarySalesExcel(List<Invoice> invoices) throws IOException {
+        String companyName = companyProfileService.get().companyName();
+
+        try (Workbook wb = new XSSFWorkbook()) {
+            Sheet sheet = wb.createSheet("Secondary Sales");
+
+            CellStyle headerStyle = wb.createCellStyle();
+            Font headerFont = wb.createFont();
+            headerFont.setBold(true);
+            headerStyle.setFont(headerFont);
+            headerStyle.setFillForegroundColor(IndexedColors.GREY_25_PERCENT.getIndex());
+            headerStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+
+            CellStyle moneyStyle = wb.createCellStyle();
+            moneyStyle.setDataFormat(wb.createDataFormat().getFormat("#,##0.00"));
+
+            Row header = sheet.createRow(0);
+            for (int c = 0; c < SECONDARY_SALES_HEADERS.length; c++) {
+                Cell cell = header.createCell(c);
+                cell.setCellValue(SECONDARY_SALES_HEADERS[c]);
+                cell.setCellStyle(headerStyle);
+            }
+
+            int r = 1;
+            for (Invoice invoice : invoices) {
+                r = writeSecondarySalesEntry(sheet, r, invoice, companyName, moneyStyle);
+            }
+
+            for (int c = 0; c < SECONDARY_SALES_HEADERS.length; c++) {
+                sheet.autoSizeColumn(c);
+            }
+
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            wb.write(out);
+            return out.toByteArray();
+        }
+    }
+
+    private int writeSecondarySalesEntry(Sheet sheet, int startRow, Invoice invoice,
+                                          String companyName, CellStyle moneyStyle) {
+        Order order = invoice.getOrder();
+        Customer customer = invoice.getCustomer();
+        Distributor distributor = order.getDistributor();
+        User salesRep = order.getSalesRep();
+
+        String dateStr      = fmtDate(invoice.getIssuedDate());
+        String timeStr      = fmtTime(order.getOrderDate());
+        String longitude    = customer != null && customer.getLongitude() != null ? customer.getLongitude().toPlainString() : "";
+        String latitude     = customer != null && customer.getLatitude()  != null ? customer.getLatitude().toPlainString()  : "";
+        String distCode     = distributor != null ? distributor.getCode() : "";
+        String distName     = distributor != null ? distributor.getName() : "";
+        String dsrId        = salesRep != null ? salesRep.getUsername() : "";
+        String dsrName      = salesRep != null ? salesRep.getFullName() : "";
+        String outletCode   = customer != null ? customer.getCustomerCode() : "";
+        String outletName   = customer != null ? customer.getName() : "";
+        String invoiceNumber = invoice.getInvoiceNumber() != null ? invoice.getInvoiceNumber() : "";
+
+        int r = startRow;
+        for (OrderItem item : order.getItems()) {
+            Product product = item.getProduct();
+            Row row = sheet.createRow(r++);
+            int c = 0;
+            row.createCell(c++).setCellValue(dateStr);
+            row.createCell(c++).setCellValue(timeStr);
+            row.createCell(c++).setCellValue(longitude);
+            row.createCell(c++).setCellValue(latitude);
+            row.createCell(c++).setCellValue(companyName != null ? companyName : "");
+            row.createCell(c++).setCellValue(distCode);
+            row.createCell(c++).setCellValue(distName);
+            row.createCell(c++).setCellValue(dsrId);
+            row.createCell(c++).setCellValue(dsrName);
+            row.createCell(c++).setCellValue(""); // RouteCode — no matching data in this system
+            row.createCell(c++).setCellValue(""); // RouteName — no matching data in this system
+            row.createCell(c++).setCellValue(outletCode);
+            row.createCell(c++).setCellValue(outletName);
+            row.createCell(c++).setCellValue(""); // CommonOutletCode — no matching data in this system
+            row.createCell(c++).setCellValue(invoiceNumber);
+            row.createCell(c++).setCellValue(item.getPriceSource() != null ? item.getPriceSource() : "");
+            row.createCell(c++).setCellValue(""); // Method — no line-level payment method in this system
+            row.createCell(c++).setCellValue(product != null ? product.getProductCode() : "");
+            row.createCell(c++).setCellValue(product != null ? product.getName() : "");
+            row.createCell(c++).setCellValue(item.getQuantity() != null ? item.getQuantity().doubleValue() : 0);
+            row.createCell(c++).setCellValue(""); // vol — no matching data in this system
+            money(row, c++, item.getDiscountAmount(), moneyStyle);
+            money(row, c++, freeIssueValue(item), moneyStyle);
+            money(row, c, item.getLineTotal(), moneyStyle);
+        }
+        return r;
+    }
+
+    /**
+     * FREE_PRODUCT lines are stored with a zero or fully-discounted unitPrice (see
+     * PricingEngine.resolveFreeItems), so the actual value of stock given away for free
+     * isn't persisted — it's derived here from the product's current default price.
+     */
+    private BigDecimal freeIssueValue(OrderItem item) {
+        if (!"FREE_PRODUCT".equals(item.getPriceSource()) || item.getProduct() == null) return BigDecimal.ZERO;
+        BigDecimal defaultPrice = item.getProduct().getDefaultPrice();
+        BigDecimal qty = item.getQuantity();
+        if (defaultPrice == null || qty == null) return BigDecimal.ZERO;
+        return defaultPrice.multiply(qty);
+    }
+
     private void money(Row row, int col, BigDecimal value, CellStyle style) {
         Cell cell = row.createCell(col);
         cell.setCellValue(value != null ? value.doubleValue() : 0);
@@ -193,5 +321,9 @@ public class DetailedExportGenerator {
 
     private String fmtInstant(Instant instant) {
         return instant != null ? DATE_FMT.format(instant.atZone(ZoneOffset.UTC)) : "";
+    }
+
+    private String fmtTime(Instant instant) {
+        return instant != null ? TIME_FMT.format(instant.atZone(ZoneOffset.UTC)) : "";
     }
 }
