@@ -45,7 +45,7 @@ public class BatchPrice {
     @JoinColumn(name = "promotion_id")
     private Promotion promotion;
 
-    @Column(nullable = false, precision = 12, scale = 2)
+    @Column(nullable = false, precision = 15, scale = 5)
     private BigDecimal price;
 
     @Column(name = "min_qty", precision = 10, scale = 3)

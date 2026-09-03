@@ -29,7 +29,10 @@ public class OrderItem {
     @Column(nullable = false, precision = 10, scale = 3)
     private BigDecimal quantity;
 
-    @Column(name = "unit_price", nullable = false, precision = 12, scale = 2)
+    // scale 5 (not the usual 2) so a batch price defined to 5 decimal places (see
+    // BatchPrice.price) survives onto the order line instead of being silently rounded away —
+    // downstream monetary amounts (discountAmount/taxAmount/lineTotal) still round to 2dp.
+    @Column(name = "unit_price", nullable = false, precision = 15, scale = 5)
     private BigDecimal unitPrice;
 
     @Column(name = "discount_pct", precision = 5, scale = 2)
