@@ -209,8 +209,7 @@ public class ReturnDamageNoteGenerator {
                 .add(new Paragraph(copyLabel).setFont(bold).setFontSize(8)
                         .setTextAlignment(TextAlignment.RIGHT).setMarginBottom(2))
                 .add(new Paragraph(note.docLabel()).setFont(bold).setFontSize(18)
-                        .setFontColor(ColorConstants.WHITE)
-                        .setBackgroundColor(darkBlue)
+                        .setFontColor(ColorConstants.BLACK)
                         .setTextAlignment(TextAlignment.RIGHT)
                         .setBorder(new SolidBorder(ColorConstants.BLACK, 1f)).setPadding(4))
                 .setBorder(Border.NO_BORDER).setPadding(8));
@@ -347,11 +346,9 @@ public class ReturnDamageNoteGenerator {
         String copyLabel = note.printCount() <= 1 ? "**  ORIGINAL  **" : "**  COPY " + (note.printCount() - 1) + "  **";
         txt(buf, copyLabel + "\n");
 
-        esc(buf, 0x1D, 0x42, 0x01); // reverse video on
-        esc(buf, 0x1B, 0x21, 0x18); // double-height + bold
+        esc(buf, 0x1B, 0x21, 0x18); // double-height + bold, no reverse video (plain black text)
         txt(buf, note.docLabel() + "\n");
         esc(buf, 0x1B, 0x21, 0x00);
-        esc(buf, 0x1D, 0x42, 0x00); // reverse video off
         txt(buf, "\n");
 
         esc(buf, 0x1B, 0x61, 0x00); // left align
