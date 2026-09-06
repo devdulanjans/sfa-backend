@@ -225,11 +225,11 @@ public class InvoicePdfGenerator {
                 .setBorder(Border.NO_BORDER)
                 .setBorderLeft(outer).setBorderRight(outer).setBorderBottom(div).setPadding(8));
 
-        // ── 6. DELIVERY DATE ──────────────────────────────────────────────────
+        // ── 6. DATE OF SUPPLY ────────────────────────────────────────────────
         Table meta = new Table(UnitValue.createPercentArray(new float[]{100}))
                 .setWidth(UnitValue.createPercentValue(100)).setBorder(Border.NO_BORDER);
 
-        meta.addCell(metaBox("Delivery Date", order.getOrderDate() != null
+        meta.addCell(metaBox("Date of Supply", order.getOrderDate() != null
                 ? fmtInstant(order.getOrderDate()) : "—", bold, regular, false));
 
         frame.addCell(new Cell().add(meta).setBorder(Border.NO_BORDER)
@@ -471,8 +471,8 @@ public class InvoicePdfGenerator {
         txt(buf, "Purchase Order No : " + safe(order.getPoNumber(), dots(15)) + " Date : " + dots(8) + "\n");
         txt(buf, "=".repeat(W) + "\n\n");
 
-        // ── Delivery date ─────────────────────────────────────────────────────
-        txt(buf, "Delivery Date     : " + (order.getOrderDate() != null ? fmtInstant(order.getOrderDate()) : "—") + "\n");
+        // ── Date of supply ────────────────────────────────────────────────────
+        txt(buf, "Date of Supply    : " + (order.getOrderDate() != null ? fmtInstant(order.getOrderDate()) : "—") + "\n");
         txt(buf, "=".repeat(W) + "\n\n");
 
         // ── Items — must never wrap to a second line ─────────────────────────
@@ -665,11 +665,11 @@ public class InvoicePdfGenerator {
         doc.add(rLine("=".repeat(W), mono));
         doc.add(rLine("", mono));
 
-        // ── Purchase Order No / Delivery Date — printed when the rep entered one ──
+        // ── Purchase Order No / Date of Supply — printed when the rep entered one ──
         doc.add(rLine("Purchase Order No : " + safe(order.getPoNumber(), dots(15)) + " Date : " + dots(8), mono));
         doc.add(rLine("=".repeat(W), mono));
         doc.add(rLine("", mono));
-        doc.add(rLine("Delivery Date     : " + (order.getOrderDate() != null ? fmtInstant(order.getOrderDate()) : "—"), mono));
+        doc.add(rLine("Date of Supply    : " + (order.getOrderDate() != null ? fmtInstant(order.getOrderDate()) : "—"), mono));
         doc.add(rLine("=".repeat(W), mono));
         doc.add(rLine("", mono));
 
