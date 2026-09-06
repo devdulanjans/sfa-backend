@@ -27,4 +27,13 @@ public class DamageItem {
 
     @Column(nullable = false, precision = 10, scale = 3)
     private BigDecimal quantity;
+
+    // scale 5 (not the usual 2) so a batch price defined to 5 decimal places (see
+    // BatchPrice.price) survives onto the line instead of being silently rounded away.
+    @Column(name = "unit_price", nullable = false, precision = 15, scale = 5)
+    @Builder.Default
+    private BigDecimal unitPrice = BigDecimal.ZERO;
+
+    @Column(name = "price_source", length = 20)
+    private String priceSource;
 }

@@ -38,6 +38,7 @@ public class DamageService {
     private final ProductRepository productRepository;
     private final UserRepository userRepository;
     private final ReturnDamageNoteGenerator noteGenerator;
+    private final PricingEngine pricingEngine;
 
     @PersistenceContext
     private EntityManager em;
@@ -116,9 +117,13 @@ public class DamageService {
         for (DamageItemRequest itemReq : req.items()) {
             Product product = productRepository.findById(itemReq.productId())
                     .orElseThrow(() -> new ResourceNotFoundException("Product", itemReq.productId()));
+            PricingEngine.PriceResult price = pricingEngine.resolve(
+                    itemReq.productId(), customer.getId(), itemReq.quantity(), itemReq.batchPriceId());
             DamageItem item = new DamageItem();
             item.setProduct(product);
             item.setQuantity(itemReq.quantity());
+            item.setUnitPrice(price.unitPrice());
+            item.setPriceSource(price.source());
             item.setDamageHeader(damage);
             items.add(item);
         }
