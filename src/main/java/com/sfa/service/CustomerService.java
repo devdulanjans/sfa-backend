@@ -265,6 +265,7 @@ public class CustomerService {
         if (req.source() != null) {
             c.setSource(Customer.CustomerSource.valueOf(req.source()));
         }
+        c.setSplitPromoInvoiceEnabled(req.splitPromoInvoiceEnabled());
 
         // Single-level branch hierarchy: a branch can never itself become a parent, and a
         // parent (has its own branches) can never become someone else's branch.

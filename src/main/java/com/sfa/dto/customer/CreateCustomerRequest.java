@@ -24,6 +24,7 @@ public record CreateCustomerRequest(
         BigDecimal creditLimit,
         Integer creditDays,
         String source,
+        boolean splitPromoInvoiceEnabled,
         @NotEmpty @Valid List<AddressRequest> addresses,
         java.util.UUID parentCustomerId
 ) {}

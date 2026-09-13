@@ -96,6 +96,17 @@ public class Customer {
     @Builder.Default
     private CustomerSource source = CustomerSource.MANUAL;
 
+    // Splits promotional (Buy-X-Get-Y free) items onto their own printed invoice
+    // document — paid items print as usual, free items print as a second full
+    // invoice-layout document valued at qty x price, with no VAT line since
+    // nothing is actually charged for them. The order/invoice stay single
+    // records; this only affects InvoicePdfGenerator's print output. A branch
+    // customer inherits this from its parent even when its own flag is off —
+    // see InvoicePdfGenerator.isSplitPromoInvoiceEnabled.
+    @Column(name = "split_promo_invoice_enabled", nullable = false)
+    @Builder.Default
+    private boolean splitPromoInvoiceEnabled = false;
+
     @Column(precision = 10, scale = 7)
     private BigDecimal latitude;
 

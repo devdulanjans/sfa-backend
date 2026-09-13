@@ -9,7 +9,9 @@ import com.itextpdf.kernel.font.PdfFont;
 import com.itextpdf.kernel.font.PdfFontFactory;
 import com.itextpdf.kernel.geom.PageSize;
 import com.itextpdf.kernel.pdf.PdfDocument;
+import com.itextpdf.kernel.pdf.PdfReader;
 import com.itextpdf.kernel.pdf.PdfWriter;
+import com.itextpdf.kernel.utils.PdfMerger;
 import com.itextpdf.layout.Document;
 import com.itextpdf.layout.borders.Border;
 import com.itextpdf.layout.borders.SolidBorder;
@@ -87,17 +89,98 @@ public class InvoicePdfGenerator {
     private static final String[] TENS  = {"", "", "Twenty", "Thirty", "Forty", "Fifty",
             "Sixty", "Seventy", "Eighty", "Ninety"};
 
+    // ── Split-promo-invoice customers ─────────────────────────────────────────
+    // A branch inherits this from its head office even when its own flag is off,
+    // same as CreateCustomerRequest/Customer.parentCustomer's other inherited behaviour.
+    private boolean isSplitPromoInvoiceEnabled(Customer customer) {
+        if (customer.isSplitPromoInvoiceEnabled()) return true;
+        Customer parent = customer.getParentCustomer();
+        return parent != null && parent.isSplitPromoInvoiceEnabled();
+    }
+
+    private boolean shouldSplitFreeItems(Invoice invoice, Order order) {
+        return isSplitPromoInvoiceEnabled(invoice.getCustomer()) && !freeItems(order).isEmpty();
+    }
+
+    private List<OrderItem> paidItems(Order order) {
+        return order.getItems().stream().filter(i -> !"FREE_PRODUCT".equals(i.getPriceSource())).toList();
+    }
+
+    private List<OrderItem> freeItems(Order order) {
+        return order.getItems().stream().filter(i -> "FREE_PRODUCT".equals(i.getPriceSource())).toList();
+    }
+
+    /** Retail valuation of the free items (qty x price) — same fallback used for a free
+     *  line's displayed unit price elsewhere: a free item's unitPrice is 0 when
+     *  show_promotion_as_discount is off, so fall back to the product's own default price. */
+    private BigDecimal freeItemsValue(List<OrderItem> freeItems) {
+        BigDecimal sum = BigDecimal.ZERO;
+        for (OrderItem item : freeItems) {
+            BigDecimal unitPrice = item.getUnitPrice().compareTo(BigDecimal.ZERO) == 0
+                    ? item.getProduct().getDefaultPrice()
+                    : item.getUnitPrice();
+            sum = sum.add(unitPrice.multiply(item.getQuantity()));
+        }
+        return sum;
+    }
+
+    /** Merges two independently-rendered single-page(s) PDFs into one multi-page PDF —
+     *  used to combine the paid-items and free-items documents into a single print job. */
+    private byte[] mergePdfDocuments(byte[]... docs) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        try (PdfDocument merged = new PdfDocument(new PdfWriter(out))) {
+            PdfMerger merger = new PdfMerger(merged);
+            for (byte[] doc : docs) {
+                try (PdfDocument src = new PdfDocument(new PdfReader(new ByteArrayInputStream(doc)))) {
+                    merger.merge(src, 1, src.getNumberOfPages());
+                }
+            }
+        }
+        return out.toByteArray();
+    }
+
     // ── A4 PDF (Tax Invoice) ─────────────────────────────────────────────────
 
     public byte[] generate(Invoice invoice, Order order) throws IOException {
+        if (!shouldSplitFreeItems(invoice, order)) {
+            return renderPdf(invoice, order, order.getItems(),
+                    invoice.getSubtotal(), invoice.getDiscountTotal(), invoice.getTaxTotal(), invoice.getTotal(), false);
+        }
+        List<OrderItem> paid = paidItems(order);
+        List<OrderItem> free = freeItems(order);
+        byte[] paidDoc = renderPdf(invoice, order, paid,
+                invoice.getSubtotal(), invoice.getDiscountTotal(), invoice.getTaxTotal(), invoice.getTotal(), false);
+        BigDecimal freeValue = freeItemsValue(free);
+        byte[] freeDoc = renderPdf(invoice, order, free, freeValue, BigDecimal.ZERO, BigDecimal.ZERO, freeValue, true);
+        return mergePdfDocuments(paidDoc, freeDoc);
+    }
+
+    /**
+     * Builds one full A4 invoice document from an explicit item list and totals, rather than
+     * always reading {@code order.getItems()}/{@code invoice.getX()} directly — lets
+     * {@link #generate} call this twice (paid items with the invoice's real totals, then free
+     * items with their own qty x price valuation) when {@link #shouldSplitFreeItems} is true,
+     * merging the two into one 2-page PDF via {@link #mergePdfDocuments}. When splitting isn't
+     * needed, the single call site behaves exactly as this method always did.
+     *
+     * @param printItems     the order items to print on this document (paid-only, free-only,
+     *                       or — when not splitting — every item on the order)
+     * @param isFreeGoodsDoc true for the free-items document — shows "FREE ITEMS ISSUED"
+     *                       instead of "TAX INVOICE"/"INVOICE" and a single valuation total
+     *                       row instead of the normal Subtotal/Discount/VAT/Total breakdown,
+     *                       since nothing is actually charged for these items.
+     */
+    private byte[] renderPdf(Invoice invoice, Order order, List<OrderItem> printItems,
+                              BigDecimal subtotal, BigDecimal discountTotal, BigDecimal taxTotal, BigDecimal total,
+                              boolean isFreeGoodsDoc) throws IOException {
         CompanyProfileDto profile  = companyProfileService.get();
         byte[]            logoBytes = fetchLogoBytes(profile);
 
         // "Tax Invoice" only when VAT was actually charged on this invoice — same rule
         // as the ESC/POS generator's isVatInvoice, kept in sync so both formats agree.
-        boolean isVatInvoice = invoice.getTaxTotal() != null
-                && invoice.getTaxTotal().compareTo(BigDecimal.ZERO) > 0;
-        String invoiceTypeLabel = isVatInvoice ? "TAX INVOICE" : "INVOICE";
+        boolean isVatInvoice = !isFreeGoodsDoc && taxTotal != null
+                && taxTotal.compareTo(BigDecimal.ZERO) > 0;
+        String invoiceTypeLabel = isFreeGoodsDoc ? "FREE ITEMS ISSUED" : (isVatInvoice ? "TAX INVOICE" : "INVOICE");
         int printCount = invoice.getPrintCount() == null ? 1 : invoice.getPrintCount();
         String copyLabel = printCount <= 1 ? "ORIGINAL" : "COPY " + (printCount - 1);
 
@@ -251,7 +334,7 @@ public class InvoicePdfGenerator {
         }
 
         int no = 1;
-        for (OrderItem item : order.getItems()) {
+        for (OrderItem item : printItems) {
             boolean isFree = "FREE_PRODUCT".equals(item.getPriceSource());
             // A free line's discount always fully offsets its price, so lineTotal/taxAmount
             // net to zero by design — printing that would show "0.00" for the Amount column
@@ -273,7 +356,7 @@ public class InvoicePdfGenerator {
             items.addCell(iCell(fmtAmount(displayUnitPrice),           regular, TextAlignment.RIGHT));
             items.addCell(iCell(fmtAmount(amountExclVat),              regular, TextAlignment.RIGHT));
         }
-        int blanks = Math.max(0, 5 - order.getItems().size());
+        int blanks = Math.max(0, 5 - printItems.size());
         for (int i = 0; i < blanks; i++) {
             for (int j = 0; j < 5; j++)
                 items.addCell(new Cell().add(new Paragraph(" ").setFontSize(9)).setHeight(18).setPadding(3));
@@ -286,24 +369,31 @@ public class InvoicePdfGenerator {
         Table totals = new Table(UnitValue.createPercentArray(new float[]{62, 38}))
                 .setWidth(UnitValue.createPercentValue(100)).setBorder(Border.NO_BORDER);
 
-        BigDecimal discountTotalPdf = invoice.getDiscountTotal() != null ? invoice.getDiscountTotal() : BigDecimal.ZERO;
-        boolean hasDiscountPdf = discountTotalPdf.compareTo(BigDecimal.ZERO) > 0;
+        if (isFreeGoodsDoc) {
+            // No VAT/discount breakdown — nothing is actually charged for these items, this
+            // is a valuation of the free stock issued, not a real payable amount.
+            totRow(totals, "Total Value of Free Goods Issued",
+                    fmtAmount(total), true, bold, bold);
+        } else {
+            BigDecimal discountTotalPdf = discountTotal != null ? discountTotal : BigDecimal.ZERO;
+            boolean hasDiscountPdf = discountTotalPdf.compareTo(BigDecimal.ZERO) > 0;
 
-        totRow(totals, "Total Value of Supply",
-                fmtAmount(invoice.getSubtotal()), false, bold, regular);
-        if (hasDiscountPdf) {
-            totRow(totals, "Discount",
-                    "(" + fmtAmount(discountTotalPdf) + ")", false, bold, regular);
-            // Amount VAT is actually calculated on — makes explicit that VAT applies
-            // after the discount, not on the pre-discount Total Value of Supply.
-            totRow(totals, "Net Amount",
-                    fmtAmount(invoice.getSubtotal().subtract(discountTotalPdf)), false, bold, regular);
+            totRow(totals, "Total Value of Supply",
+                    fmtAmount(subtotal), false, bold, regular);
+            if (hasDiscountPdf) {
+                totRow(totals, "Discount",
+                        "(" + fmtAmount(discountTotalPdf) + ")", false, bold, regular);
+                // Amount VAT is actually calculated on — makes explicit that VAT applies
+                // after the discount, not on the pre-discount Total Value of Supply.
+                totRow(totals, "Net Amount",
+                        fmtAmount(subtotal.subtract(discountTotalPdf)), false, bold, regular);
+            }
+            totRow(totals, "VAT Amount (" + (hasDiscountPdf ? "Net Amount" : "Total Value of Supply")
+                            + " @ " + formatRate(effectiveTaxPct(subtotal, discountTotalPdf, taxTotal)) + "%)",
+                    fmtAmount(taxTotal), false, bold, regular);
+            totRow(totals, "Total Amount Including VAT",
+                    fmtAmount(total), true, bold, bold);
         }
-        totRow(totals, "VAT Amount (" + (hasDiscountPdf ? "Net Amount" : "Total Value of Supply")
-                        + " @ " + formatRate(effectiveTaxPct(invoice)) + "%)",
-                fmtAmount(invoice.getTaxTotal()), false, bold, regular);
-        totRow(totals, "Total Amount Including VAT",
-                fmtAmount(invoice.getTotal()), true, bold, bold);
 
         frame.addCell(new Cell().add(totals).setBorder(Border.NO_BORDER)
                 .setBorderLeft(outer).setBorderRight(outer).setBorderBottom(div).setPadding(0));
@@ -312,7 +402,7 @@ public class InvoicePdfGenerator {
         frame.addCell(new Cell()
                 .add(new Paragraph()
                         .add(new Text("Total Amount in Words :  ").setFont(bold).setFontSize(8.5f))
-                        .add(new Text(amountInWords(invoice.getTotal())).setFont(italic).setFontSize(8.5f)))
+                        .add(new Text(amountInWords(total)).setFont(italic).setFontSize(8.5f)))
                 .setBorder(Border.NO_BORDER)
                 .setBorderLeft(outer).setBorderRight(outer).setBorderBottom(div)
                 .setPadding(8));
@@ -379,6 +469,29 @@ public class InvoicePdfGenerator {
     // onto a second line around column ~70). 64 leaves a safe margin.
 
     public byte[] generateEscPos(Invoice invoice, Order order) {
+        if (!shouldSplitFreeItems(invoice, order)) {
+            return renderEscPos(invoice, order, order.getItems(),
+                    invoice.getSubtotal(), invoice.getDiscountTotal(), invoice.getTaxTotal(), invoice.getTotal(), false);
+        }
+        List<OrderItem> paid = paidItems(order);
+        List<OrderItem> free = freeItems(order);
+        byte[] paidReceipt = renderEscPos(invoice, order, paid,
+                invoice.getSubtotal(), invoice.getDiscountTotal(), invoice.getTaxTotal(), invoice.getTotal(), false);
+        BigDecimal freeValue = freeItemsValue(free);
+        byte[] freeReceipt = renderEscPos(invoice, order, free, freeValue, BigDecimal.ZERO, BigDecimal.ZERO, freeValue, true);
+        // Each of the two calls already ends with a feed + cut (see the end of renderEscPos),
+        // so concatenating the raw byte streams naturally prints as two separate receipts.
+        ByteArrayOutputStream combined = new ByteArrayOutputStream();
+        combined.writeBytes(paidReceipt);
+        combined.writeBytes(freeReceipt);
+        return combined.toByteArray();
+    }
+
+    /** ESC/POS counterpart to {@link #renderPdf} — see its Javadoc for why this takes an
+     *  explicit item list/totals instead of always reading order.getItems()/invoice.getX(). */
+    private byte[] renderEscPos(Invoice invoice, Order order, List<OrderItem> printItems,
+                                 BigDecimal subtotal, BigDecimal discountTotal, BigDecimal taxTotal, BigDecimal total,
+                                 boolean isFreeGoodsDoc) {
         CompanyProfileDto profile = companyProfileService.get();
 
         final int W = 64;
@@ -390,8 +503,8 @@ public class InvoicePdfGenerator {
         // EXEMPT/ZERO_RATED. Checking the actual tax total (rather than just
         // tax-number presence) keeps this correct even if a customer has a
         // tax number on file but is still marked exempt.
-        boolean isVatInvoice = invoice.getTaxTotal() != null
-                && invoice.getTaxTotal().compareTo(BigDecimal.ZERO) > 0;
+        boolean isVatInvoice = !isFreeGoodsDoc && taxTotal != null
+                && taxTotal.compareTo(BigDecimal.ZERO) > 0;
         String invoiceNoLabel = isVatInvoice ? "Tax Invoice No :" : "Invoice No :";
 
         // ── Header — hardware center-alignment only (no manual padding: doing
@@ -422,7 +535,7 @@ public class InvoicePdfGenerator {
 
         // TAX INVOICE / INVOICE banner, right after Original/Copy — double-height
         // + bold (no reverse video) so it stands out without a black background.
-        String invoiceTypeLabel = isVatInvoice ? "TAX INVOICE" : "INVOICE";
+        String invoiceTypeLabel = isFreeGoodsDoc ? "FREE ITEMS ISSUED" : (isVatInvoice ? "TAX INVOICE" : "INVOICE");
         esc(buf, 0x1B, 0x21, 0x18); // double-height + bold
         txt(buf, invoiceTypeLabel + "\n");
         esc(buf, 0x1B, 0x21, 0x00); // reset text size/weight
@@ -483,7 +596,7 @@ public class InvoicePdfGenerator {
         txt(buf, "-".repeat(W) + "\n");
 
         int no = 1;
-        for (OrderItem item : order.getItems()) {
+        for (OrderItem item : printItems) {
             boolean isFree = "FREE_PRODUCT".equals(item.getPriceSource());
             String name = trunc(item.getProduct().getName() + (isFree ? " (FREE)" : ""), 24);
             String qty  = trunc(item.getQuantity().toPlainString(), 6);
@@ -508,23 +621,31 @@ public class InvoicePdfGenerator {
 
         // ── Totals ────────────────────────────────────────────────────────────
         int lw = 46, rw = W - lw;
-        BigDecimal discountTotalEsc = invoice.getDiscountTotal() != null ? invoice.getDiscountTotal() : BigDecimal.ZERO;
-        boolean hasDiscountEsc = discountTotalEsc.compareTo(BigDecimal.ZERO) > 0;
 
-        txt(buf, pR("Total Value of Supply", lw) + pL(fmtAmount(invoice.getSubtotal()), rw) + "\n");
-        if (hasDiscountEsc) {
-            txt(buf, pR("Discount", lw) + pL("(" + fmtAmount(discountTotalEsc) + ")", rw) + "\n");
-            // Amount VAT is actually calculated on — makes explicit that VAT applies
-            // after the discount, not on the pre-discount Total Value of Supply.
-            txt(buf, pR("Net Amount", lw) + pL(fmtAmount(invoice.getSubtotal().subtract(discountTotalEsc)), rw) + "\n");
+        if (isFreeGoodsDoc) {
+            // No VAT/discount breakdown — see renderPdf's totals section for why.
+            esc(buf, 0x1B, 0x21, 0x08);
+            txt(buf, pR("Total Value of Free Goods Issued", lw) + pL(fmtAmount(total), rw) + "\n");
+            esc(buf, 0x1B, 0x21, 0x00);
+        } else {
+            BigDecimal discountTotalEsc = discountTotal != null ? discountTotal : BigDecimal.ZERO;
+            boolean hasDiscountEsc = discountTotalEsc.compareTo(BigDecimal.ZERO) > 0;
+
+            txt(buf, pR("Total Value of Supply", lw) + pL(fmtAmount(subtotal), rw) + "\n");
+            if (hasDiscountEsc) {
+                txt(buf, pR("Discount", lw) + pL("(" + fmtAmount(discountTotalEsc) + ")", rw) + "\n");
+                // Amount VAT is actually calculated on — makes explicit that VAT applies
+                // after the discount, not on the pre-discount Total Value of Supply.
+                txt(buf, pR("Net Amount", lw) + pL(fmtAmount(subtotal.subtract(discountTotalEsc)), rw) + "\n");
+            }
+            txt(buf, pR("VAT Amount (@ " + formatRate(effectiveTaxPct(subtotal, discountTotalEsc, taxTotal)) + "%)", lw) + pL(fmtAmount(taxTotal),  rw) + "\n");
+            esc(buf, 0x1B, 0x21, 0x08);
+            txt(buf, pR("Total Amount Including VAT", lw) + pL(fmtAmount(total), rw) + "\n");
+            esc(buf, 0x1B, 0x21, 0x00);
         }
-        txt(buf, pR("VAT Amount (@ " + formatRate(effectiveTaxPct(invoice)) + "%)", lw) + pL(fmtAmount(invoice.getTaxTotal()),  rw) + "\n");
-        esc(buf, 0x1B, 0x21, 0x08);
-        txt(buf, pR("Total Amount Including VAT", lw) + pL(fmtAmount(invoice.getTotal()), rw) + "\n");
-        esc(buf, 0x1B, 0x21, 0x00);
         txt(buf, "=".repeat(W) + "\n\n");
 
-        txt(buf, wrapLabeledField("Total Amount in Words : ", amountInWords(invoice.getTotal()), W));
+        txt(buf, wrapLabeledField("Total Amount in Words : ", amountInWords(total), W));
         txt(buf, "=".repeat(W) + "\n\n");
 
         // ── Mode of payment (above Payment Instructions) / bank details ──────
@@ -1083,9 +1204,16 @@ public class InvoicePdfGenerator {
      * it (tax is now resolved per-customer, see PricingEngine.resolveTaxPct).
      */
     private BigDecimal effectiveTaxPct(Invoice invoice) {
-        BigDecimal subtotal = invoice.getSubtotal() != null ? invoice.getSubtotal() : BigDecimal.ZERO;
-        BigDecimal discount = invoice.getDiscountTotal() != null ? invoice.getDiscountTotal() : BigDecimal.ZERO;
-        BigDecimal taxTotal = invoice.getTaxTotal() != null ? invoice.getTaxTotal() : BigDecimal.ZERO;
+        return effectiveTaxPct(invoice.getSubtotal(), invoice.getDiscountTotal(), invoice.getTaxTotal());
+    }
+
+    /** Same rate derivation as {@link #effectiveTaxPct(Invoice)}, but from explicit
+     *  subtotal/discount/tax amounts — used when rendering a document (e.g. the split
+     *  paid-items invoice) whose totals aren't simply the invoice's own stored fields. */
+    private BigDecimal effectiveTaxPct(BigDecimal invoiceSubtotal, BigDecimal invoiceDiscountTotal, BigDecimal invoiceTaxTotal) {
+        BigDecimal subtotal = invoiceSubtotal != null ? invoiceSubtotal : BigDecimal.ZERO;
+        BigDecimal discount = invoiceDiscountTotal != null ? invoiceDiscountTotal : BigDecimal.ZERO;
+        BigDecimal taxTotal = invoiceTaxTotal != null ? invoiceTaxTotal : BigDecimal.ZERO;
         BigDecimal taxableBase = subtotal.subtract(discount);
         return taxableBase.compareTo(BigDecimal.ZERO) > 0
                 ? taxTotal.divide(taxableBase, 4, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(100))
