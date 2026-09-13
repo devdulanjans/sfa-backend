@@ -164,12 +164,15 @@ public interface CustomerRepository extends JpaRepository<Customer, UUID> {
     List<Customer> findByIdsUpdatedSince(@Param("ids") Set<UUID> ids, @Param("since") Instant since);
 
     // Sync variants that eagerly load assignedProducts so CustomerDto includes product IDs.
-    // POS-generated customers are excluded — they exist only for POS billing, not for mobile sales reps.
+    // Includes POS-generated customers too — a customer created via POS quick-create (e.g. a
+    // branch billed at the counter) can still be a legitimate SFA customer for route/van sales,
+    // so excluding by source here made such customers invisible to mobile delta sync even though
+    // the unfiltered /api/customers list (used by Full Refresh) always included them.
     @EntityGraph(attributePaths = "assignedProducts")
-    @Query("SELECT c FROM Customer c WHERE c.updatedAt >= :since AND c.source <> 'POS'")
+    @Query("SELECT c FROM Customer c WHERE c.updatedAt >= :since")
     List<Customer> findUpdatedSinceWithProducts(@Param("since") Instant since);
 
     @EntityGraph(attributePaths = "assignedProducts")
-    @Query("SELECT c FROM Customer c WHERE c.id IN :ids AND c.updatedAt >= :since AND c.source <> 'POS'")
+    @Query("SELECT c FROM Customer c WHERE c.id IN :ids AND c.updatedAt >= :since")
     List<Customer> findByIdsUpdatedSinceWithProducts(@Param("ids") Set<UUID> ids, @Param("since") Instant since);
 }
