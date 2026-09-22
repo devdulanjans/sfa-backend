@@ -30,6 +30,10 @@ public class LicenseSettings {
     @Builder.Default
     private boolean financeEnabled = false;
 
+    @Column(name = "multi_tenant_enabled", nullable = false)
+    @Builder.Default
+    private boolean multiTenantEnabled = true;
+
     @Column(name = "client_name", length = 200)
     private String clientName;
 

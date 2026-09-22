@@ -10,6 +10,7 @@ import com.sfa.exception.ResourceNotFoundException;
 import com.sfa.repository.ChartOfAccountRepository;
 import com.sfa.repository.InvoiceRepository;
 import com.sfa.repository.OrderRepository;
+import com.sfa.security.TenantGuard;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.criteria.Join;
@@ -157,6 +158,7 @@ public class InvoiceService {
     public Invoice generateInvoice(UUID orderId, UUID userId) {
         Order order = orderRepo.findById(orderId)
                 .orElseThrow(() -> new ResourceNotFoundException("Order", orderId));
+        order = TenantGuard.requireVisible(order, "Order", orderId);
 
         if (order.getStatus() != Order.OrderStatus.APPROVED) {
             throw new BusinessException("Only APPROVED orders can be invoiced");
@@ -168,6 +170,7 @@ public class InvoiceService {
         Invoice invoice = Invoice.builder()
                 .invoiceNumber(generateInvoiceNumber(order))
                 .order(order)
+                .tenant(order.getTenant())
                 .customer(order.getCustomer())
                 .issuedDate(LocalDate.now())
                 .dueDate(LocalDate.now().plusDays(30))
@@ -214,6 +217,7 @@ public class InvoiceService {
     public byte[] getPdfBytes(UUID invoiceId) {
         Invoice invoice = invoiceRepo.findById(invoiceId)
                 .orElseThrow(() -> new ResourceNotFoundException("Invoice", invoiceId));
+        invoice = TenantGuard.requireVisible(invoice, "Invoice", invoiceId);
 
         // Try to serve the stored PDF first
         if (invoice.getPdfPath() != null) {
@@ -276,14 +280,18 @@ public class InvoiceService {
 
     @Transactional(readOnly = true)
     public Invoice getInvoice(UUID id) {
-        return invoiceRepo.findById(id)
+        Invoice invoice = invoiceRepo.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Invoice", id));
+        // @Filter doesn't cover a by-id lookup (only HQL/Criteria queries) — without this,
+        // any channel could fetch/print another channel's invoice by guessing its id.
+        return TenantGuard.requireVisible(invoice, "Invoice", id);
     }
 
     @Transactional(readOnly = true)
     public Invoice getInvoiceByOrder(UUID orderId) {
-        return invoiceRepo.findByOrderId(orderId)
+        Invoice invoice = invoiceRepo.findByOrderId(orderId)
                 .orElseThrow(() -> new ResourceNotFoundException("Invoice for order", orderId));
+        return TenantGuard.requireVisible(invoice, "Invoice for order", orderId);
     }
 
     /**

@@ -27,25 +27,27 @@ public class CompanyProfileController {
     }
 
     @PutMapping
-    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','ADMIN')")
     public CompanyProfileDto update(@Valid @RequestBody CompanyProfileUpdateRequest req,
                                      @AuthenticationPrincipal UserDetailsImpl principal) {
         return companyProfileService.update(req, principal.getId());
     }
 
     @PostMapping(value = "/logo", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','ADMIN')")
     public CompanyProfileDto uploadLogo(@RequestParam("file") MultipartFile file,
                                         @AuthenticationPrincipal UserDetailsImpl principal) {
         return companyProfileService.uploadLogo(file, principal.getId());
     }
 
     // Public — rendered directly via <img src> in the admin UI and printed receipts,
-    // and browsers don't attach the JWT bearer header to image requests.
+    // and browsers don't attach the JWT bearer header to image requests. There's no JWT
+    // here to carry a channel, so once more than one channel exists, callers must pass
+    // tenantId explicitly (the browser already knows its own active channel).
     @GetMapping("/logo")
-    public ResponseEntity<byte[]> logo() {
-        byte[] bytes = companyProfileService.getLogoBytes();
-        String contentType = companyProfileService.getLogoContentType();
+    public ResponseEntity<byte[]> logo(@RequestParam(required = false) java.util.UUID tenantId) {
+        byte[] bytes = companyProfileService.getLogoBytes(tenantId);
+        String contentType = companyProfileService.getLogoContentType(tenantId);
         return ResponseEntity.ok()
                 .contentType(contentType != null ? MediaType.parseMediaType(contentType) : MediaType.APPLICATION_OCTET_STREAM)
                 .body(bytes);

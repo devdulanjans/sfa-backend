@@ -3,9 +3,11 @@ package com.sfa.entity;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.BatchSize;
+import org.hibernate.annotations.Filter;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
+import com.sfa.security.TenantAwareEntityListener;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -18,17 +20,25 @@ import java.util.UUID;
 @Entity
 @Table(name = "customers", indexes = {
     @Index(name = "idx_customers_code",   columnList = "customer_code"),
-    @Index(name = "idx_customers_status", columnList = "status")
+    @Index(name = "idx_customers_status", columnList = "status"),
+    @Index(name = "idx_customers_tenant", columnList = "tenant_id")
+}, uniqueConstraints = {
+    @UniqueConstraint(name = "uk_customers_tenant_code", columnNames = {"tenant_id", "customer_code"})
 })
-@EntityListeners(AuditingEntityListener.class)
+@EntityListeners({AuditingEntityListener.class, TenantAwareEntityListener.class})
+@Filter(name = "tenantFilter", condition = "tenant_id = :tenantId")
 @Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor
-public class Customer {
+public class Customer implements TenantScoped {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    @Column(name = "customer_code", nullable = false, unique = true, length = 30)
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "tenant_id", nullable = false)
+    private Tenant tenant;
+
+    @Column(name = "customer_code", nullable = false, length = 30)
     private String customerCode;
 
     @Column(nullable = false, length = 200)

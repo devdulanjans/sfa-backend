@@ -2,22 +2,32 @@ package com.sfa.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.Filter;
 import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
+
+import com.sfa.security.TenantAwareEntityListener;
 
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
 
 @Entity
-@Table(name = "company_profile")
-@EntityListeners(AuditingEntityListener.class)
+@Table(name = "company_profile", uniqueConstraints = {
+    @UniqueConstraint(name = "uk_company_profile_tenant", columnNames = {"tenant_id"})
+})
+@EntityListeners({AuditingEntityListener.class, TenantAwareEntityListener.class})
+@Filter(name = "tenantFilter", condition = "tenant_id = :tenantId")
 @Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor
-public class CompanyProfile {
+public class CompanyProfile implements TenantScoped {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "tenant_id", nullable = false)
+    private Tenant tenant;
 
     @Column(name = "company_name", nullable = false, length = 200)
     private String companyName;
@@ -45,6 +55,9 @@ public class CompanyProfile {
 
     @Column(name = "tax_id", length = 100)
     private String taxId;
+
+    @Column(name = "registration_number", length = 100)
+    private String registrationNumber;
 
     @Column(name = "vat_registration_number", length = 100)
     private String vatRegistrationNumber;

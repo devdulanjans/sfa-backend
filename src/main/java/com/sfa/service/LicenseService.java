@@ -43,6 +43,10 @@ public class LicenseService {
         return snapshot().isFinanceEnabled();
     }
 
+    public boolean isMultiTenantEnabled() {
+        return snapshot().isMultiTenantEnabled();
+    }
+
     @Transactional(readOnly = true)
     public LicenseSettingsDto get() {
         return LicenseSettingsDto.from(snapshot());
@@ -54,6 +58,7 @@ public class LicenseService {
         s.setSfaEnabled(req.sfaEnabled());
         s.setPosEnabled(req.posEnabled());
         s.setFinanceEnabled(req.financeEnabled());
+        s.setMultiTenantEnabled(req.multiTenantEnabled());
         s.setClientName(req.clientName());
         s.setNote(req.note());
         s.setUpdatedBy(updatedBy);

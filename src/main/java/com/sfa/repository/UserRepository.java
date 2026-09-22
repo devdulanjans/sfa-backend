@@ -38,4 +38,13 @@ public interface UserRepository extends JpaRepository<User, UUID> {
                                                       Pageable pageable);
 
     List<User> findByUsernameIn(Collection<String> usernames);
+
+    // Used to scope the Users list for an ADMIN (channel-scoped) actor to only the
+    // users sharing at least one of its own channels — done as a real query rather
+    // than filtering a fetched Page, since post-filtering would desync page size/totals.
+    @Query(value = "SELECT DISTINCT u FROM User u JOIN u.tenants t WHERE t.id IN :tenantIds AND u.username NOT IN :hidden",
+           countQuery = "SELECT COUNT(DISTINCT u) FROM User u JOIN u.tenants t WHERE t.id IN :tenantIds AND u.username NOT IN :hidden")
+    Page<User> findByAnyTenantIdInExcludingUsernames(@Param("tenantIds") Collection<UUID> tenantIds,
+                                                      @Param("hidden") Collection<String> hidden,
+                                                      Pageable pageable);
 }

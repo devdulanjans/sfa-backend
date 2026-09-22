@@ -10,6 +10,7 @@ public record LicenseSettingsDto(
         boolean sfaEnabled,
         boolean posEnabled,
         boolean financeEnabled,
+        boolean multiTenantEnabled,
         String clientName,
         String note,
         Instant updatedAt
@@ -20,6 +21,7 @@ public record LicenseSettingsDto(
                 s.isSfaEnabled(),
                 s.isPosEnabled(),
                 s.isFinanceEnabled(),
+                s.isMultiTenantEnabled(),
                 s.getClientName(),
                 s.getNote(),
                 s.getUpdatedAt()

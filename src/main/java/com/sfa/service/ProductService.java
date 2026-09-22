@@ -13,6 +13,7 @@ import com.sfa.repository.ProductCategoryRepository;
 import com.sfa.repository.ProductRepository;
 import com.sfa.repository.StockLevelRepository;
 import com.sfa.repository.UnitRepository;
+import com.sfa.security.TenantGuard;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -36,6 +37,7 @@ public class ProductService {
     private final UnitRepository unitRepository;
     private final CustomerRepository customerRepository;
     private final StockLevelRepository stockLevelRepository;
+    private final TenantAccessService tenantAccessService;
     private final AuditLogService auditLogService;
 
     public Page<ProductDto> list(String search, Pageable pageable) {
@@ -74,13 +76,22 @@ public class ProductService {
     }
 
     @Transactional
-    public ProductDto create(CreateProductRequest req) {
+    public ProductDto create(CreateProductRequest req, UUID actingUserId) {
         if (productRepository.findByProductCode(req.productCode()).isPresent()) {
             throw new BusinessException("Product code already exists: " + req.productCode());
         }
         checkBarcodeUnique(req.barcode(), null);
         Product p = new Product();
         applyFields(p, req);
+
+        // Explicit channel (SUPER_ADMIN always; a multi-channel actor optionally) — findById,
+        // not getReferenceById: ProductDto.from() below reads tenant.getCode() on this same
+        // object, and forcing that lazy proxy to initialize this late races the @Async audit
+        // logger touching the same proxy, corrupting Hibernate's session state. Absent, the
+        // TenantAwareEntityListener stamps the ambient channel automatically on save().
+        tenantAccessService.resolveExplicitTenant(req.tenantId(), actingUserId, "product")
+                .ifPresent(p::setTenant);
+
         Product saved = productRepository.save(p);
         auditLogService.log(null, "CREATE", "Product", saved.getId(), null, saved);
         return ProductDto.from(saved);
@@ -139,7 +150,10 @@ public class ProductService {
     }
 
     private Product findOrThrow(UUID id) {
-        return productRepository.findById(id)
+        Product p = productRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Product", id));
+        // @Filter doesn't cover a by-id lookup (only HQL/Criteria queries) — without this,
+        // any channel could fetch/edit/deactivate another channel's product by guessing its id.
+        return TenantGuard.requireVisible(p, "Product", id);
     }
 }

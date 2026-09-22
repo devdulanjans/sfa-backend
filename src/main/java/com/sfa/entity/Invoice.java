@@ -2,8 +2,11 @@ package com.sfa.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.Filter;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
+
+import com.sfa.security.TenantAwareEntityListener;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -14,15 +17,25 @@ import java.util.UUID;
 @Table(name = "invoices", indexes = {
     @Index(name = "idx_invoices_number",   columnList = "invoice_number"),
     @Index(name = "idx_invoices_customer", columnList = "customer_id"),
-    @Index(name = "idx_invoices_date",     columnList = "issued_date")
+    @Index(name = "idx_invoices_date",     columnList = "issued_date"),
+    @Index(name = "idx_invoices_tenant",   columnList = "tenant_id")
 })
-@EntityListeners(AuditingEntityListener.class)
+@EntityListeners({AuditingEntityListener.class, TenantAwareEntityListener.class})
+@Filter(name = "tenantFilter", condition = "tenant_id = :tenantId")
 @Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor
-public class Invoice {
+public class Invoice implements TenantScoped {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
+
+    // Set explicitly from the order's own tenant at generation time (InvoiceService),
+    // not left to ambient auto-stamping — an invoice must always carry the SAME channel
+    // as its order, never whichever channel happens to be active in the generating
+    // request (matters if that ever differs, e.g. a background/batch invoice run).
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "tenant_id", nullable = false)
+    private Tenant tenant;
 
     @Column(name = "invoice_number", nullable = false, unique = true, length = 20)
     private String invoiceNumber;

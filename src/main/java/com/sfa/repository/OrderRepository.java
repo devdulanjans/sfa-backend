@@ -3,6 +3,7 @@ package com.sfa.repository;
 import com.sfa.dto.report.CustomerSalesDto;
 import com.sfa.dto.report.SalesSummaryDto;
 import com.sfa.entity.Order;
+import com.sfa.security.TenantContext;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -133,13 +134,15 @@ public interface OrderRepository extends JpaRepository<Order, UUID>, JpaSpecific
         FROM orders o
         WHERE o.order_date BETWEEN :from AND :to
           AND o.status NOT IN ('DRAFT','CANCELLED')
+          AND (:tenantId IS NULL OR o.tenant_id = :tenantId)
         GROUP BY DATE_TRUNC('day', o.order_date AT TIME ZONE 'UTC')
         ORDER BY DATE_TRUNC('day', o.order_date AT TIME ZONE 'UTC')
     """, nativeQuery = true)
-    List<Object[]> dailyRevenueRaw(@Param("from") Instant from, @Param("to") Instant to);
+    List<Object[]> dailyRevenueRaw(@Param("from") Instant from, @Param("to") Instant to,
+                                   @Param("tenantId") UUID tenantId);
 
     default List<SalesSummaryDto.DailyRevenueDto> dailyRevenueBetween(Instant from, Instant to) {
-        return dailyRevenueRaw(from, to).stream()
+        return dailyRevenueRaw(from, to, TenantContext.getTenantId()).stream()
                 .map(row -> new SalesSummaryDto.DailyRevenueDto(
                         String.valueOf(row[0]),
                         row[1] instanceof BigDecimal bd ? bd
@@ -344,11 +347,13 @@ public interface OrderRepository extends JpaRepository<Order, UUID>, JpaSpecific
         WHERE o.sales_rep_id = :repId
           AND o.order_date BETWEEN :from AND :to
           AND o.status NOT IN ('DRAFT','CANCELLED')
+          AND (:tenantId IS NULL OR o.tenant_id = :tenantId)
         GROUP BY DATE_TRUNC('day', o.order_date AT TIME ZONE 'UTC')
         ORDER BY DATE_TRUNC('day', o.order_date AT TIME ZONE 'UTC')
     """, nativeQuery = true)
     List<Object[]> dailyRevenueByRepRaw(
-            @Param("repId") UUID repId, @Param("from") Instant from, @Param("to") Instant to);
+            @Param("repId") UUID repId, @Param("from") Instant from, @Param("to") Instant to,
+            @Param("tenantId") UUID tenantId);
 
     @Query(value = """
         SELECT c.name, COALESCE(SUM(o.total), 0), COUNT(o.id)
@@ -357,12 +362,14 @@ public interface OrderRepository extends JpaRepository<Order, UUID>, JpaSpecific
         WHERE o.sales_rep_id = :repId
           AND o.order_date BETWEEN :from AND :to
           AND o.status NOT IN ('DRAFT','CANCELLED')
+          AND (:tenantId IS NULL OR o.tenant_id = :tenantId)
         GROUP BY c.id, c.name
         ORDER BY 2 DESC
         LIMIT 10
     """, nativeQuery = true)
     List<Object[]> topCustomersByRepRaw(
-            @Param("repId") UUID repId, @Param("from") Instant from, @Param("to") Instant to);
+            @Param("repId") UUID repId, @Param("from") Instant from, @Param("to") Instant to,
+            @Param("tenantId") UUID tenantId);
 
     @Query(value = """
         SELECT c.name, COALESCE(SUM(o.total), 0), COUNT(o.id)
@@ -370,11 +377,13 @@ public interface OrderRepository extends JpaRepository<Order, UUID>, JpaSpecific
         JOIN customers c ON c.id = o.customer_id
         WHERE o.order_date BETWEEN :from AND :to
           AND o.status NOT IN ('DRAFT','CANCELLED')
+          AND (:tenantId IS NULL OR o.tenant_id = :tenantId)
         GROUP BY c.id, c.name
         ORDER BY 2 DESC
         LIMIT 10
     """, nativeQuery = true)
-    List<Object[]> topCustomersAllRaw(@Param("from") Instant from, @Param("to") Instant to);
+    List<Object[]> topCustomersAllRaw(@Param("from") Instant from, @Param("to") Instant to,
+                                       @Param("tenantId") UUID tenantId);
 
     @Query(value = """
         SELECT o.order_number, c.name, o.total, o.status,
@@ -382,20 +391,22 @@ public interface OrderRepository extends JpaRepository<Order, UUID>, JpaSpecific
         FROM orders o
         JOIN customers c ON c.id = o.customer_id
         WHERE o.sales_rep_id = :repId
+          AND (:tenantId IS NULL OR o.tenant_id = :tenantId)
         ORDER BY o.order_date DESC
         LIMIT 10
     """, nativeQuery = true)
-    List<Object[]> recentOrdersByRepRaw(@Param("repId") UUID repId);
+    List<Object[]> recentOrdersByRepRaw(@Param("repId") UUID repId, @Param("tenantId") UUID tenantId);
 
     @Query(value = """
         SELECT o.order_number, c.name, o.total, o.status,
                TO_CHAR(o.order_date AT TIME ZONE 'UTC', 'YYYY-MM-DD')
         FROM orders o
         JOIN customers c ON c.id = o.customer_id
+        WHERE (:tenantId IS NULL OR o.tenant_id = :tenantId)
         ORDER BY o.order_date DESC
         LIMIT 10
     """, nativeQuery = true)
-    List<Object[]> recentOrdersAllRaw();
+    List<Object[]> recentOrdersAllRaw(@Param("tenantId") UUID tenantId);
 
     @Query(value = """
         SELECT u.id, u.full_name,
@@ -406,9 +417,11 @@ public interface OrderRepository extends JpaRepository<Order, UUID>, JpaSpecific
         JOIN users u ON u.id = o.sales_rep_id
         WHERE o.order_date BETWEEN :from AND :to
           AND o.status NOT IN ('DRAFT','CANCELLED')
+          AND (:tenantId IS NULL OR o.tenant_id = :tenantId)
         GROUP BY u.id, u.full_name
         ORDER BY revenue DESC
         LIMIT 10
     """, nativeQuery = true)
-    List<Object[]> topSalesRepsByRevenue(@Param("from") Instant from, @Param("to") Instant to);
+    List<Object[]> topSalesRepsByRevenue(@Param("from") Instant from, @Param("to") Instant to,
+                                          @Param("tenantId") UUID tenantId);
 }

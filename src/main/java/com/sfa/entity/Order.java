@@ -2,9 +2,12 @@ package com.sfa.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.Filter;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
+
+import com.sfa.security.TenantAwareEntityListener;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -17,15 +20,24 @@ import java.util.UUID;
     @Index(name = "idx_orders_number",      columnList = "order_number"),
     @Index(name = "idx_orders_customer",    columnList = "customer_id"),
     @Index(name = "idx_orders_rep_status",  columnList = "sales_rep_id,status"),
-    @Index(name = "idx_orders_date",        columnList = "order_date")
+    @Index(name = "idx_orders_date",        columnList = "order_date"),
+    @Index(name = "idx_orders_tenant",      columnList = "tenant_id")
 })
-@EntityListeners(AuditingEntityListener.class)
+@EntityListeners({AuditingEntityListener.class, TenantAwareEntityListener.class})
+@Filter(name = "tenantFilter", condition = "tenant_id = :tenantId")
 @Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor
-public class Order {
+public class Order implements TenantScoped {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
+
+    // Auto-stamped from the sales rep's active channel at creation (TenantAwareEntityListener)
+    // — this is what makes the printed invoice show the channel the order was actually placed
+    // under, regardless of which channel is later active on whoever prints it.
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "tenant_id", nullable = false)
+    private Tenant tenant;
 
     @Column(name = "order_number", nullable = false, unique = true, length = 20)
     private String orderNumber;

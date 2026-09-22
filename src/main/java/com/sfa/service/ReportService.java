@@ -5,6 +5,7 @@ import com.sfa.dto.report.SalesRepPerformanceDto;
 import com.sfa.dto.report.SalesSummaryDto;
 import com.sfa.repository.InvoiceRepository;
 import com.sfa.repository.OrderRepository;
+import com.sfa.security.TenantContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -60,7 +61,8 @@ public class ReportService {
     public List<SalesRepPerformanceDto> salesRepPerformance(LocalDate from, LocalDate to) {
         return orderRepository.topSalesRepsByRevenue(
                 from.atStartOfDay().toInstant(ZoneOffset.UTC),
-                to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC)
+                to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC),
+                TenantContext.getTenantId()
         ).stream().map(row -> {
             BigDecimal revenue = row[2] instanceof BigDecimal bd ? bd : new BigDecimal(row[2].toString());
             BigDecimal avg     = row[4] instanceof BigDecimal bd ? bd : new BigDecimal(row[4].toString());

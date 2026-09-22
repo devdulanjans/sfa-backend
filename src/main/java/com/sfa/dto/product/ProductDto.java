@@ -26,7 +26,10 @@ public record ProductDto(
         Double maxDiscountAmount,
         String status,
         Double stockOnHand,
-        Double stockAvailable
+        Double stockAvailable,
+        UUID tenantId,
+        String tenantCode,
+        String tenantName
 ) {
     public static ProductDto from(Product p) {
         return from(p, null);
@@ -69,7 +72,10 @@ public record ProductDto(
                 p.getMaxDiscountAmount() != null ? p.getMaxDiscountAmount().doubleValue() : null,
                 p.getStatus() != null ? p.getStatus().name() : null,
                 stockOnHand,
-                stockAvailable
+                stockAvailable,
+                p.getTenant() != null ? p.getTenant().getId() : null,
+                p.getTenant() != null ? p.getTenant().getCode() : null,
+                p.getTenant() != null ? p.getTenant().getName() : null
         );
     }
 }

@@ -2,9 +2,12 @@ package com.sfa.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.Filter;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
+
+import com.sfa.security.TenantAwareEntityListener;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -15,15 +18,24 @@ import java.util.UUID;
 
 @Entity
 @Table(name = "promotions", indexes = {
-    @Index(name = "idx_promo_active_date", columnList = "is_active,start_date,end_date")
+    @Index(name = "idx_promo_active_date", columnList = "is_active,start_date,end_date"),
+    @Index(name = "idx_promo_tenant",       columnList = "tenant_id")
 })
-@EntityListeners(AuditingEntityListener.class)
+@EntityListeners({AuditingEntityListener.class, TenantAwareEntityListener.class})
+@Filter(name = "tenantFilter", condition = "tenant_id = :tenantId")
 @Getter @Setter @Builder(toBuilder = true) @NoArgsConstructor @AllArgsConstructor
-public class Promotion {
+public class Promotion implements TenantScoped {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
+
+    // Not @JsonIgnore here — unlike BatchPrice, Promotion is only ever returned wrapped in
+    // PromotionResponseDto, which reads tenantCode/tenantName explicitly and never
+    // serializes this entity directly.
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "tenant_id", nullable = false)
+    private Tenant tenant;
 
     @Column(nullable = false, length = 200)
     private String name;
