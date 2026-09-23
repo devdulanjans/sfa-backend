@@ -1,11 +1,13 @@
 package com.sfa.service;
 
+import com.sfa.entity.BatchPrice;
 import com.sfa.entity.Order;
 import com.sfa.entity.StockBatch;
 import com.sfa.entity.StockBatchConsumption;
 import com.sfa.entity.StockLevel;
 import com.sfa.entity.StockMovement;
 import com.sfa.exception.BusinessException;
+import com.sfa.repository.BatchPriceRepository;
 import com.sfa.repository.ProductRepository;
 import com.sfa.repository.StockBatchConsumptionRepository;
 import com.sfa.repository.StockBatchRepository;
@@ -32,6 +34,7 @@ public class InventoryService {
     private final StockBatchRepository            stockBatchRepo;
     private final StockBatchConsumptionRepository batchConsumptionRepo;
     private final ProductRepository               productRepo;
+    private final BatchPriceRepository            batchPriceRepo;
     private final SystemSettingService            systemSettingService;
 
     @Transactional(readOnly = true)
@@ -81,9 +84,14 @@ public class InventoryService {
         return saved;
     }
 
-    /** Receives a new stock batch (its own cost/quantity/received date) and bumps the aggregate on-hand total. */
+    /** Receives a new stock batch (its own cost/quantity/received date) and bumps the aggregate on-hand total.
+     *  @param sellingPrice optional — when given, also records a new general (no customer/customer-group
+     *                      targeting) {@link BatchPrice} for this product effective from {@code receivedDate},
+     *                      so a product that had no selling price yet (or whose price changed with this
+     *                      shipment) becomes correctly priced without a separate manual step. Purely additive:
+     *                      {@code null} leaves pricing untouched, exactly like before this parameter existed. */
     public StockLevel receiveStock(UUID productId, BigDecimal receivedQty, BigDecimal unitCost,
-                                    LocalDate receivedDate, String notes, UUID userId) {
+                                    LocalDate receivedDate, String notes, UUID userId, BigDecimal sellingPrice) {
         if (!isEnabled()) {
             throw new BusinessException("Enable inventory tracking before receiving stock");
         }
@@ -95,6 +103,9 @@ public class InventoryService {
         }
         if (receivedDate == null) {
             throw new BusinessException("Received date is required");
+        }
+        if (sellingPrice != null && sellingPrice.compareTo(BigDecimal.ZERO) < 0) {
+            throw new BusinessException("Selling price must be zero or greater");
         }
 
         stockBatchRepo.save(StockBatch.builder()
@@ -124,6 +135,29 @@ public class InventoryService {
                 .notes(notes)
                 .createdBy(userId)
                 .build());
+
+        if (sellingPrice != null) {
+            var product = productRepo.findById(productId)
+                    .orElseThrow(() -> new BusinessException("Product not found: " + productId));
+            // General tier (no customer/customer-group targeting) — open-ended (no endDate), so it
+            // simply supersedes any earlier general tier for this product via PricingEngine's
+            // "most recent startDate wins" ordering, rather than requiring an explicit replace/edit
+            // step. minQty=1 (not null) matches every other general/group batch price row in this
+            // system: PricingEngine's best-tier query ranks by minQty DESC *before* startDate DESC,
+            // so a null minQty here would rank below any existing minQty-tiered row for the same
+            // product regardless of which is newer — silently never taking effect. Tenant is set
+            // explicitly to the product's own channel — not left for TenantAwareEntityListener to
+            // stamp from the ambient request context, which would throw for an unscoped SUPER_ADMIN
+            // who hasn't switched into a specific channel; a batch price for this product must live
+            // in that product's channel regardless of who received the stock.
+            batchPriceRepo.save(BatchPrice.builder()
+                    .tenant(product.getTenant())
+                    .product(product)
+                    .minQty(BigDecimal.ONE)
+                    .price(sellingPrice)
+                    .startDate(receivedDate)
+                    .build());
+        }
 
         return saved;
     }

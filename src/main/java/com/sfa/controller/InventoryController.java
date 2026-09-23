@@ -72,6 +72,7 @@ public class InventoryController {
     public StockLevelDto getStock(@PathVariable UUID productId) {
         var product = productRepo.findById(productId)
                 .orElseThrow(() -> new com.sfa.exception.ResourceNotFoundException("Product", productId));
+        product = com.sfa.security.TenantGuard.requireVisible(product, "Product", productId);
         StockLevel s = inventoryService.getStock(productId);
         return new StockLevelDto(product.getId(), product.getName(), product.getProductCode(),
                 s.getOnHand(), s.getReserved(), s.getUpdatedAt());
@@ -88,8 +89,11 @@ public class InventoryController {
         String notes   = (String) body.getOrDefault("notes", "");
         UUID userId    = principal.getId();
 
+        var product = productRepo.findById(productId)
+                .orElseThrow(() -> new com.sfa.exception.ResourceNotFoundException("Product", productId));
+        product = com.sfa.security.TenantGuard.requireVisible(product, "Product", productId);
+
         StockLevel updated = inventoryService.adjust(productId, qty, notes, userId);
-        var product = productRepo.findById(productId).orElseThrow();
         return ResponseEntity.ok(new StockLevelDto(product.getId(), product.getName(),
                 product.getProductCode(), updated.getOnHand(), updated.getReserved(), updated.getUpdatedAt()));
     }
@@ -105,10 +109,16 @@ public class InventoryController {
         BigDecimal unitCost     = new BigDecimal(body.get("unitCost").toString());
         LocalDate receivedDate  = LocalDate.parse((String) body.get("receivedDate"));
         String notes            = (String) body.getOrDefault("notes", "");
+        Object sellingPriceRaw  = body.get("sellingPrice");
+        BigDecimal sellingPrice = (sellingPriceRaw != null && !sellingPriceRaw.toString().isBlank())
+                ? new BigDecimal(sellingPriceRaw.toString()) : null;
+
+        var product = productRepo.findById(productId)
+                .orElseThrow(() -> new com.sfa.exception.ResourceNotFoundException("Product", productId));
+        product = com.sfa.security.TenantGuard.requireVisible(product, "Product", productId);
 
         StockLevel updated = inventoryService.receiveStock(
-                productId, quantity, unitCost, receivedDate, notes, principal.getId());
-        var product = productRepo.findById(productId).orElseThrow();
+                productId, quantity, unitCost, receivedDate, notes, principal.getId(), sellingPrice);
         return ResponseEntity.ok(new StockLevelDto(product.getId(), product.getName(),
                 product.getProductCode(), updated.getOnHand(), updated.getReserved(), updated.getUpdatedAt()));
     }
