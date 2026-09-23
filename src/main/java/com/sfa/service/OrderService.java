@@ -47,6 +47,7 @@ public class OrderService {
     private final SystemSettingService   systemSettingService;
     private final InvoiceService         invoiceService;
     private final InventoryService       inventoryService;
+    private final PromotionRepository    promotionRepo;
 
     @PersistenceContext
     private EntityManager em;
@@ -105,6 +106,12 @@ public class OrderService {
                 .build();
 
         Map<UUID, BigDecimal> purchasedQty = new java.util.LinkedHashMap<>();
+        // FREE_PRODUCT promotions the rep explicitly passed over for one of their trigger
+        // products (picked a different promotion instead) — collected below, then excluded from
+        // resolveFreeItems so that per-line choice is actually exclusive rather than being
+        // silently re-granted by the cart-wide free-item step, which otherwise only looks at
+        // purchased quantities. See PricingEngine.resolve's promotionId javadoc.
+        java.util.Set<UUID> excludedFreePromotionIds = new java.util.LinkedHashSet<>();
         int lineNo = 0;
 
         for (OrderItemRequest itemReq : request.items()) {
@@ -117,7 +124,15 @@ public class OrderService {
                     customerId,
                     itemReq.quantity(),
                     itemReq.discountPct(),
-                    itemReq.batchPriceId());
+                    itemReq.batchPriceId(),
+                    itemReq.promotionId());
+
+            if (itemReq.promotionId() != null) {
+                promotionRepo.findActivePromotions(itemReq.productId(), customerId, LocalDate.now()).stream()
+                        .filter(p -> p.getType() == Promotion.PromotionType.FREE_PRODUCT)
+                        .filter(p -> !p.getId().equals(itemReq.promotionId()))
+                        .forEach(p -> excludedFreePromotionIds.add(p.getId()));
+            }
 
             OrderItem item = OrderItem.builder()
                     .product(product)
@@ -142,7 +157,8 @@ public class OrderService {
         // any client-submitted "free" line in request.items() above was priced normally like
         // any other line and is ignored for this purpose.
         for (PricingEngine.FreeLineResult free : pricingEngine.resolveFreeItems(
-                purchasedQty, customerId, systemSettingService.isShowPromotionAsDiscount())) {
+                purchasedQty, customerId, systemSettingService.isShowPromotionAsDiscount(),
+                excludedFreePromotionIds)) {
             Product freeProduct = productRepo.findById(free.productId())
                     .orElseThrow(() -> new ResourceNotFoundException("Product", free.productId()));
 

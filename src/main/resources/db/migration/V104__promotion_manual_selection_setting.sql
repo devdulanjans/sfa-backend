@@ -1,0 +1,2 @@
+INSERT INTO system_settings (key, value, description) VALUES
+('promotion_manual_selection', 'true', 'When true (default), if more than one promotion applies to a product for a customer, the sales rep must explicitly pick which one to apply. When false, the system applies the best match automatically: a discount promotion (percentage/fixed) always prices the item, and any Buy-X-Get-Y promotion still independently grants its free item — both stack rather than one silently overriding the other.');

@@ -13,5 +13,9 @@ public record OrderItemRequest(
     // Optional: the exact BatchPrice row the client picked from /pricing/tiers (e.g. the
     // mobile price-tier sheet). When present and still valid, this is used verbatim instead
     // of re-resolving "the best" batch price server-side — see PricingEngine.resolve.
-    UUID batchPriceId
+    UUID batchPriceId,
+    // Optional: the exact Promotion the client picked from /pricing/promotions, when more than
+    // one was active for this product (see SystemSettingService#isPromotionManualSelectionEnabled).
+    // When present and still active, used verbatim instead of auto-picking — see PricingEngine.resolve.
+    UUID promotionId
 ) {}
