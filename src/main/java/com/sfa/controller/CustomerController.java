@@ -7,6 +7,8 @@ import com.sfa.dto.customer.CustomerDto;
 import com.sfa.dto.customer.CustomerImportResultDto;
 import com.sfa.dto.customer.QuickCreateCustomerRequest;
 import com.sfa.dto.product.ProductDto;
+import com.sfa.dto.tenant.BulkAssignResultDto;
+import com.sfa.dto.tenant.BulkAssignTenantRequest;
 import com.sfa.entity.Damage;
 import com.sfa.entity.Order;
 import com.sfa.entity.PosSale;
@@ -152,6 +154,13 @@ public class CustomerController {
     @RequiresLicense(LicensedPackage.SFA)
     public CustomerDto update(@PathVariable UUID id, @Valid @RequestBody CreateCustomerRequest req) {
         return customerService.update(id, req);
+    }
+
+    @PostMapping("/bulk-assign-tenant")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @RequiresLicense(LicensedPackage.MULTI_TENANT)
+    public BulkAssignResultDto bulkAssignTenant(@Valid @RequestBody BulkAssignTenantRequest req) {
+        return customerService.bulkAssignTenant(req);
     }
 
     @DeleteMapping("/{id}")

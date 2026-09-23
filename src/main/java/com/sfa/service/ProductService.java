@@ -2,9 +2,12 @@ package com.sfa.service;
 
 import com.sfa.dto.product.CreateProductRequest;
 import com.sfa.dto.product.ProductDto;
+import com.sfa.dto.tenant.BulkAssignResultDto;
+import com.sfa.dto.tenant.BulkAssignTenantRequest;
 import com.sfa.entity.Product;
 import com.sfa.entity.ProductCategory;
 import com.sfa.entity.StockLevel;
+import com.sfa.entity.Tenant;
 import com.sfa.entity.Unit;
 import com.sfa.exception.BusinessException;
 import com.sfa.exception.ResourceNotFoundException;
@@ -20,6 +23,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -106,6 +110,39 @@ public class ProductService {
         Product saved = productRepository.save(p);
         auditLogService.log(null, "UPDATE", "Product", saved.getId(), before, ProductDto.from(saved));
         return ProductDto.from(saved);
+    }
+
+    /** Moves a batch of existing products into a different channel — SUPER_ADMIN only
+     *  (see ProductController), so every id is looked up unfiltered by channel. Each
+     *  row is validated/saved independently so one bad id doesn't fail the whole batch. */
+    @Transactional
+    public BulkAssignResultDto bulkAssignTenant(BulkAssignTenantRequest req) {
+        Tenant target = tenantAccessService.findTenantOrThrow(req.tenantId());
+        List<BulkAssignResultDto.RowError> errors = new ArrayList<>();
+        int successCount = 0;
+
+        for (UUID id : req.ids()) {
+            Product p = productRepository.findById(id).orElse(null);
+            String label = p != null ? p.getName() : null;
+            try {
+                if (p == null) {
+                    throw new ResourceNotFoundException("Product", id);
+                }
+                if (p.getTenant() == null || !p.getTenant().getId().equals(target.getId())) {
+                    if (productRepository.existsByTenantIdAndProductCodeAndIdNot(target.getId(), p.getProductCode(), p.getId())) {
+                        throw new BusinessException("Code \"" + p.getProductCode() + "\" already exists in " + target.getName());
+                    }
+                    Object before = ProductDto.from(p);
+                    p.setTenant(target);
+                    Product saved = productRepository.save(p);
+                    auditLogService.log(null, "UPDATE", "Product", saved.getId(), before, ProductDto.from(saved));
+                }
+                successCount++;
+            } catch (Exception e) {
+                errors.add(new BulkAssignResultDto.RowError(id, label, e.getMessage()));
+            }
+        }
+        return new BulkAssignResultDto(req.ids().size(), successCount, errors.size(), errors);
     }
 
     private void checkBarcodeUnique(String barcode, UUID excludeId) {

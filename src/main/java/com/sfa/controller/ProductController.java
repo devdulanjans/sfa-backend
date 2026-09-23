@@ -2,6 +2,10 @@ package com.sfa.controller;
 
 import com.sfa.dto.product.CreateProductRequest;
 import com.sfa.dto.product.ProductDto;
+import com.sfa.dto.tenant.BulkAssignResultDto;
+import com.sfa.dto.tenant.BulkAssignTenantRequest;
+import com.sfa.license.LicensedPackage;
+import com.sfa.license.RequiresLicense;
 import com.sfa.security.UserDetailsImpl;
 import com.sfa.service.ProductService;
 import jakarta.validation.Valid;
@@ -62,5 +66,12 @@ public class ProductController {
     public ResponseEntity<Void> deactivate(@PathVariable UUID id) {
         productService.deactivate(id);
         return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/bulk-assign-tenant")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @RequiresLicense(LicensedPackage.MULTI_TENANT)
+    public BulkAssignResultDto bulkAssignTenant(@Valid @RequestBody BulkAssignTenantRequest req) {
+        return productService.bulkAssignTenant(req);
     }
 }

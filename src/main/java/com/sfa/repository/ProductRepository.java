@@ -17,6 +17,10 @@ public interface ProductRepository extends JpaRepository<Product, UUID> {
     Optional<Product> findByBarcode(String barcode);
     Page<Product> findByStatus(Product.ProductStatus status, Pageable pageable);
 
+    // Used by bulk channel-reassignment to pre-check the per-tenant product_code
+    // uniqueness constraint before moving a row into a different tenant.
+    boolean existsByTenantIdAndProductCodeAndIdNot(UUID tenantId, String productCode, UUID id);
+
     List<Product> findByStatusOrderByName(Product.ProductStatus status);
 
     @Query("""

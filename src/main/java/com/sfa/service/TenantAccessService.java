@@ -63,7 +63,10 @@ public class TenantAccessService {
         return Optional.of(requested);
     }
 
-    private Tenant findTenantOrThrow(UUID tenantId) {
+    /** Public for callers that already know the actor is unscoped (e.g. a SUPER_ADMIN-only
+     *  bulk-reassignment endpoint) and just need the target row, without the membership
+     *  checks {@link #resolveExplicitTenant} applies for a scoped multi-channel actor. */
+    public Tenant findTenantOrThrow(UUID tenantId) {
         return tenantRepository.findById(tenantId)
                 .orElseThrow(() -> new ResourceNotFoundException("Tenant", tenantId));
     }

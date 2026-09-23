@@ -7,11 +7,14 @@ import com.sfa.dto.customer.CustomerBranchSummaryDto;
 import com.sfa.dto.customer.CustomerDto;
 import com.sfa.dto.customer.QuickCreateCustomerRequest;
 import com.sfa.dto.product.ProductDto;
+import com.sfa.dto.tenant.BulkAssignResultDto;
+import com.sfa.dto.tenant.BulkAssignTenantRequest;
 import com.sfa.entity.Customer;
 import com.sfa.entity.CustomerAddress;
 import com.sfa.entity.CustomerCategory;
 import com.sfa.entity.Order;
 import com.sfa.entity.Product;
+import com.sfa.entity.Tenant;
 import com.sfa.exception.BusinessException;
 import com.sfa.exception.ResourceNotFoundException;
 import com.sfa.repository.CustomerCategoryRepository;
@@ -32,6 +35,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -175,6 +179,39 @@ public class CustomerService {
         Customer saved = customerRepository.save(c);
         auditLogService.log(null, "UPDATE", "Customer", saved.getId(), before, CustomerDto.from(saved));
         return CustomerDto.from(saved);
+    }
+
+    /** Moves a batch of existing customers into a different channel — SUPER_ADMIN only
+     *  (see CustomerController), so every id is looked up unfiltered by channel. Each
+     *  row is validated/saved independently so one bad id doesn't fail the whole batch. */
+    @Transactional
+    public BulkAssignResultDto bulkAssignTenant(BulkAssignTenantRequest req) {
+        Tenant target = tenantAccessService.findTenantOrThrow(req.tenantId());
+        List<BulkAssignResultDto.RowError> errors = new ArrayList<>();
+        int successCount = 0;
+
+        for (UUID id : req.ids()) {
+            Customer c = customerRepository.findById(id).orElse(null);
+            String label = c != null ? c.getName() : null;
+            try {
+                if (c == null) {
+                    throw new ResourceNotFoundException("Customer", id);
+                }
+                if (c.getTenant() == null || !c.getTenant().getId().equals(target.getId())) {
+                    if (customerRepository.existsByTenantIdAndCustomerCodeAndIdNot(target.getId(), c.getCustomerCode(), c.getId())) {
+                        throw new BusinessException("Code \"" + c.getCustomerCode() + "\" already exists in " + target.getName());
+                    }
+                    Object before = CustomerDto.from(c);
+                    c.setTenant(target);
+                    Customer saved = customerRepository.save(c);
+                    auditLogService.log(null, "UPDATE", "Customer", saved.getId(), before, CustomerDto.from(saved));
+                }
+                successCount++;
+            } catch (Exception e) {
+                errors.add(new BulkAssignResultDto.RowError(id, label, e.getMessage()));
+            }
+        }
+        return new BulkAssignResultDto(req.ids().size(), successCount, errors.size(), errors);
     }
 
     @Transactional

@@ -22,6 +22,10 @@ public interface CustomerRepository extends JpaRepository<Customer, UUID> {
     Optional<Customer> findByCustomerCode(String customerCode);
     Page<Customer> findByStatus(Customer.CustomerStatus status, Pageable pageable);
 
+    // Used by bulk channel-reassignment to pre-check the per-tenant customer_code
+    // uniqueness constraint before moving a row into a different tenant.
+    boolean existsByTenantIdAndCustomerCodeAndIdNot(UUID tenantId, String customerCode, UUID id);
+
     /** One row per (customer, assigned product) pair — used to bulk-populate
      *  CustomerDto.assignedProductIds for a page of customers without N+1
      *  queries or touching the lazy assignedProducts collection per-row. */
