@@ -29,6 +29,8 @@ public interface UserRepository extends JpaRepository<User, UUID> {
 
     Optional<User> findByCustomerId(UUID customerId);
 
+    Optional<User> findByLoginDistributorId(UUID distributorId);
+
     Page<User> findByUsernameNotIn(Collection<String> usernames, Pageable pageable);
 
     @Query(value = "SELECT u FROM User u JOIN u.distributors d WHERE d.id = :distributorId AND u.username NOT IN :hidden",

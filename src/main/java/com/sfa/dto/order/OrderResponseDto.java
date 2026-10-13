@@ -30,7 +30,10 @@ public record OrderResponseDto(
         String salespersonSignature,
         String poNumber,
         String invoiceNumber,
-        List<OrderItemDto> items
+        List<OrderItemDto> items,
+        UUID tenantId,
+        String tenantCode,
+        String tenantName
 ) {
     public record CustomerSummary(UUID id, String name, String customerCode) {}
     public record SalesRepSummary(UUID id, String fullName, String email) {}
@@ -46,7 +49,8 @@ public record OrderResponseDto(
             BigDecimal discountAmount,
             BigDecimal taxAmount,
             BigDecimal lineTotal,
-            String priceSource
+            String priceSource,
+            String promotionName
     ) {
         public record ProductSummary(UUID id, String name, String productCode) {}
     }
@@ -59,6 +63,7 @@ public record OrderResponseDto(
         var c = order.getCustomer();
         var s = order.getSalesRep();
         var d = order.getDistributor();
+        var t = order.getTenant();
         return new OrderResponseDto(
                 order.getId(),
                 order.getOrderNumber(),
@@ -95,9 +100,13 @@ public record OrderResponseDto(
                             item.getDiscountAmount(),
                             item.getTaxAmount(),
                             item.getLineTotal(),
-                            item.getPriceSource()
+                            item.getPriceSource(),
+                            item.getPromotionName()
                     );
-                }).toList()
+                }).toList(),
+                t == null ? null : t.getId(),
+                t == null ? null : t.getCode(),
+                t == null ? null : t.getName()
         );
     }
 }

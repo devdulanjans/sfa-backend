@@ -105,6 +105,41 @@ app:
   recovery:
     key: ${RECOVERY_ACCESS_KEY:}
 
+  # Google Routes API — used for the mobile app's live directions to a customer.
+  # The key stays server-side; the app calls GET /api/routing/route. Blank = routing disabled
+  # (the app then falls back to a straight-line direction).
+  google-routes:
+    api-key: ${GOOGLE_ROUTES_API_KEY:}
+    travel-mode: ${GOOGLE_ROUTES_TRAVEL_MODE:DRIVE}          # DRIVE | TWO_WHEELER | WALK
+    traffic-aware: ${GOOGLE_ROUTES_TRAFFIC_AWARE:false}      # true = live-traffic ETAs (higher-priced SKU)
+
+  # Customer order/invoice notifications are set up per channel in Settings -> Notifications.
+  # The mail / whatsapp blocks below are the optional SERVER DEFAULT account, used by any
+  # channel that leaves its own SMTP host / WhatsApp phone-number id blank.
+  notification:
+    # Encrypts the per-channel SMTP passwords / WhatsApp tokens stored in the DB. Blank = derived
+    # from JWT_SECRET. Changing it (or JWT_SECRET while blank) means re-entering those secrets.
+    secret-key: ${NOTIFICATION_SECRET_KEY:}
+  mail:
+    # Server default SMTP server; blank = no default (channels must use their own).
+    host: ${SMTP_HOST:}
+    port: ${SMTP_PORT:587}
+    username: ${SMTP_USERNAME:}
+    password: ${SMTP_PASSWORD:}
+    starttls: ${SMTP_STARTTLS:true}                         # false for port 465 (SSL) or plain relays
+    ssl: ${SMTP_SSL:false}                                  # true for port 465
+    from: ${MAIL_FROM:}                                     # defaults to SMTP_USERNAME
+    from-name: ${MAIL_FROM_NAME:}                           # defaults to the company name
+  whatsapp:
+    # Server default Meta WhatsApp Cloud API account; blank token or phone-number id = no default.
+    # api-version and default-country-code apply to every channel.
+    access-token: ${WHATSAPP_ACCESS_TOKEN:}
+    phone-number-id: ${WHATSAPP_PHONE_NUMBER_ID:}
+    api-version: ${WHATSAPP_API_VERSION:v21.0}
+    template-name: ${WHATSAPP_TEMPLATE_NAME:sales_document_summary}
+    template-language: ${WHATSAPP_TEMPLATE_LANGUAGE:en}
+    default-country-code: ${WHATSAPP_DEFAULT_COUNTRY_CODE:94}  # prefixed to local numbers like 0771234567
+
 springdoc:
   api-docs:
     path: /api-docs

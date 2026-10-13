@@ -61,6 +61,13 @@ public class UserService {
     private final PasswordEncoder        passwordEncoder;
     private final PasswordHistoryRepository passwordHistoryRepository;
     private final AuditLogService        auditLogService;
+    private final UserPermissionService  userPermissionService;
+
+    // A distributor login has no separate app of its own like the customer portal — it logs
+    // into this same admin panel, so it needs an actual permission grant to reach anything
+    // (permissions are per-user, not per-role — see UserPermissionService). Orders is the one
+    // thing it's meant to see (see OrderService.buildOrderSpec's DISTRIBUTOR branch).
+    private static final String DISTRIBUTOR_LOGIN_PERMISSION = "MOD_ORDERS";
 
     // How many previous passwords (including the one being replaced) a new password
     // is checked against — same depth for a self-change and an admin's reset.
@@ -109,6 +116,11 @@ public class UserService {
         return userRepository.findByCustomerId(customerId).map(UserDto::from);
     }
 
+    @Transactional(readOnly = true)
+    public Optional<UserDto> findByLoginDistributorId(UUID distributorId) {
+        return userRepository.findByLoginDistributorId(distributorId).map(UserDto::from);
+    }
+
     @Transactional
     public UserDto create(CreateUserRequest req, UUID actingUserId) {
         if (userRepository.existsByUsername(req.username())) {
@@ -140,8 +152,20 @@ public class UserService {
             user.setCustomer(customer);
         }
 
+        // For DISTRIBUTOR role: link to the specific distributor this login represents in the
+        // self-service portal — distinct from user.distributors (a SALES_REP's "which
+        // distributors can I place orders under" list), see User.loginDistributor's javadoc.
+        if (req.loginDistributorId() != null) {
+            Distributor loginDistributor = distributorRepository.findById(req.loginDistributorId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Distributor", req.loginDistributorId()));
+            user.setLoginDistributor(loginDistributor);
+        }
+
+        Set<Tenant> effectiveTenants = resolveEffectiveTenants(req.tenantIds(), actor);
+
         if (req.distributorIds() != null && !req.distributorIds().isEmpty()) {
             List<Distributor> distributors = distributorRepository.findAllById(req.distributorIds());
+            rejectDistributorsOutsideTenants(distributors, effectiveTenants);
             user.getDistributors().addAll(distributors);
         }
 
@@ -156,9 +180,13 @@ public class UserService {
             user.getCustomerGroups().addAll(groups);
         }
 
-        applyTenants(user, req.tenantIds(), actor);
+        applyTenants(user, effectiveTenants);
 
-        return UserDto.from(userRepository.save(user));
+        User saved = userRepository.save(user);
+        if (req.loginDistributorId() != null) {
+            userPermissionService.grant(saved.getId(), DISTRIBUTOR_LOGIN_PERMISSION, actingUserId);
+        }
+        return UserDto.from(saved);
     }
 
     @Transactional
@@ -183,9 +211,19 @@ public class UserService {
         rejectOutOfScopeTenantsForAdminActor(actor, req.tenantIds());
         user.setRole(role);
 
+        // Customer portal logins are edited from the customer page, whose password reset
+        // doesn't send the channel picker — no tenantIds there means "leave channels alone",
+        // not "clear them" (which would lock the customer out of every channel but its own).
+        boolean keepChannels = Role.CUSTOMER.equals(role.getName()) && req.tenantIds() == null;
+        Set<Tenant> effectiveTenants = keepChannels
+                ? Set.copyOf(user.getTenants())
+                : resolveEffectiveTenants(req.tenantIds(), actor);
+
         user.getDistributors().clear();
         if (req.distributorIds() != null && !req.distributorIds().isEmpty()) {
-            user.getDistributors().addAll(distributorRepository.findAllById(req.distributorIds()));
+            List<Distributor> distributors = distributorRepository.findAllById(req.distributorIds());
+            rejectDistributorsOutsideTenants(distributors, effectiveTenants);
+            user.getDistributors().addAll(distributors);
         }
 
         user.getAssignedCustomers().clear();
@@ -198,7 +236,9 @@ public class UserService {
             user.getCustomerGroups().addAll(customerGroupRepository.findAllById(req.customerGroupIds()));
         }
 
-        applyTenants(user, req.tenantIds(), actor);
+        if (!keepChannels) {
+            applyTenants(user, effectiveTenants);
+        }
 
         return UserDto.from(userRepository.save(user));
     }
@@ -265,26 +305,62 @@ public class UserService {
         }
     }
 
-    /** Full-replace, mirroring how distributors/customers/customerGroups are set from this
-     *  form. Keeps the flagged default channel if it's still in the new set; otherwise falls
-     *  back to the first of the new set, or null if the user has no channels at all.
+    /** Resolves which channels a user ends up with from this form, without mutating anything —
+     *  shared by {@link #applyTenants} and the distributor-channel guard below, since a
+     *  distributor can only be assigned from a channel the user is *actually* about to have,
+     *  including the "defaults to the admin's own channels" case, not just an explicitly
+     *  submitted tenantIds list.
      *
      *  When the acting admin is itself channel-scoped and leaves the channel picker empty,
-     *  defaults to the admin's OWN channel(s) rather than leaving the user with none —
-     *  an Admin can only ever grant channels it belongs to anyway (rejectOutOfScopeTenantsForAdminActor),
-     *  so this just makes "every user an Admin manages belongs to a channel" a guarantee
-     *  instead of something that depends on the admin remembering to check a box. A
-     *  Super Admin explicitly clearing a user's channels is left alone — that's a
-     *  deliberate platform-level action, not an oversight. */
-    private void applyTenants(User user, List<UUID> tenantIds, User actor) {
-        user.getTenants().clear();
+     *  defaults to the admin's OWN channel(s) rather than leaving the user with none — an
+     *  Admin can only ever grant channels it belongs to anyway
+     *  (rejectOutOfScopeTenantsForAdminActor), so this just makes "every user an Admin manages
+     *  belongs to a channel" a guarantee instead of something that depends on the admin
+     *  remembering to check a box. A Super Admin explicitly clearing a user's channels is left
+     *  alone — that's a deliberate platform-level action, not an oversight. */
+    private Set<Tenant> resolveEffectiveTenants(List<UUID> tenantIds, User actor) {
         if (tenantIds != null && !tenantIds.isEmpty()) {
-            user.getTenants().addAll(tenantRepository.findAllById(tenantIds));
-        } else if (isChannelScopedAdmin(actor)) {
-            user.getTenants().addAll(tenantRepository.findByUserId(actor.getId()));
+            return Set.copyOf(tenantRepository.findAllById(tenantIds));
         }
+        if (isChannelScopedAdmin(actor)) {
+            return Set.copyOf(tenantRepository.findByUserId(actor.getId()));
+        }
+        return Set.of();
+    }
+
+    /** Full-replace, mirroring how distributors/customers/customerGroups are set from this
+     *  form. Keeps the flagged default channel if it's still in the new set; otherwise falls
+     *  back to the first of the new set, or null if the user has no channels at all. */
+    private void applyTenants(User user, Set<Tenant> effectiveTenants) {
+        user.getTenants().clear();
+        user.getTenants().addAll(effectiveTenants);
         if (user.getDefaultTenant() == null || !user.getTenants().contains(user.getDefaultTenant())) {
             user.setDefaultTenant(user.getTenants().stream().findFirst().orElse(null));
+        }
+    }
+
+    // A distributor can belong to several channels at once (see Distributor.tenants) — a user
+    // can be assigned one as long as it shares AT LEAST ONE channel with what the user is
+    // actually being granted here (resolveEffectiveTenants), never a distributor whose channels
+    // are entirely unrelated. Guards against a hand-crafted request or a stale client attaching
+    // a distributor the user has no access to at all — the admin panel's own picker filters to
+    // the same set (see DistributorCheckboxes), this is the authoritative check behind it.
+    //
+    // Skipped when effectiveTenants is empty — a single-tenant install never populates
+    // user.tenants at all (applyTenants leaves it empty whenever no channel picker was shown),
+    // so an empty set here means "channels aren't in play for this request", not "assign no
+    // distributors". Only actually enforced once the user is being given specific channels.
+    private void rejectDistributorsOutsideTenants(List<Distributor> distributors, Set<Tenant> effectiveTenants) {
+        if (distributors.isEmpty() || effectiveTenants.isEmpty()) {
+            return;
+        }
+        Set<UUID> allowedTenantIds = effectiveTenants.stream().map(Tenant::getId).collect(Collectors.toSet());
+        for (Distributor d : distributors) {
+            boolean sharesChannel = d.getTenants().stream().anyMatch(t -> allowedTenantIds.contains(t.getId()));
+            if (!sharesChannel) {
+                throw new BusinessException(
+                        "Distributor \"" + d.getName() + "\" isn't under a channel assigned to this user.");
+            }
         }
     }
 

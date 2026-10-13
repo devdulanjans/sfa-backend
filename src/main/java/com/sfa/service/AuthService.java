@@ -37,6 +37,7 @@ public class AuthService {
     private final TenantRepository      tenantRepo;
     private final UserPermissionService userPermissionService;
     private final LicenseService        licenseService;
+    private final CustomerChannelService customerChannelService;
 
     public LoginResponse login(LoginRequest request) {
         // Check inactive status BEFORE authenticate() so Spring Security's filter
@@ -233,7 +234,13 @@ public class AuthService {
             return new TenantResolution(null, null, all);
         }
 
-        List<Tenant> userTenants = tenantRepo.findByUserId(user.getId());
+        // A customer-portal login is never left "pending": it sees all of its channels at once,
+        // so the active channel only decides where new rows default to — the customer record's
+        // own channel unless a still-valid one was carried over from a refresh.
+        boolean customerLogin = Role.CUSTOMER.equals(user.getRole().getName());
+        List<Tenant> userTenants = customerLogin
+                ? customerChannelService.channelsFor(user.getId(), user.getCustomer() != null ? user.getCustomer().getId() : null)
+                : tenantRepo.findByUserId(user.getId());
         if (userTenants.isEmpty()) {
             throw new BusinessException("No channel assigned to this account. Contact your administrator.");
         }
@@ -242,6 +249,9 @@ public class AuthService {
         Tenant resolved;
         if (userTenants.size() == 1) {
             resolved = userTenants.get(0);
+        } else if (customerLogin) {
+            resolved = userTenants.stream().filter(t -> t.getId().equals(preferredTenantId)).findFirst()
+                    .orElse(userTenants.get(0));
         } else {
             resolved = userTenants.stream().filter(t -> t.getId().equals(preferredTenantId)).findFirst()
                     .orElse(userTenants.contains(user.getDefaultTenant()) ? user.getDefaultTenant() : null);

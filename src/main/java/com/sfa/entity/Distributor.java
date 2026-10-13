@@ -25,6 +25,20 @@ public class Distributor {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
+    // Many-to-many, not TenantScoped's usual single tenant — a distributor can operate under
+    // several channels, and a channel can have several distributors (unlike Product/Customer,
+    // which belong to exactly one). No Hibernate @Filter here: a to-many collection can't be
+    // scoped that way, so visibility is checked explicitly (see DistributorService).
+    @JsonIgnore
+    @ManyToMany(fetch = FetchType.LAZY)
+    @JoinTable(
+        name = "distributor_tenants",
+        joinColumns = @JoinColumn(name = "distributor_id"),
+        inverseJoinColumns = @JoinColumn(name = "tenant_id")
+    )
+    @Builder.Default
+    private Set<Tenant> tenants = new HashSet<>();
+
     @Column(nullable = false, unique = true, length = 30)
     private String code;
 

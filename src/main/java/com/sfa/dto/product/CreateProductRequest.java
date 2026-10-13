@@ -17,5 +17,8 @@ public record CreateProductRequest(
         @DecimalMin("0") BigDecimal maxDiscountAmount,
         /** Only consulted when the caller is unscoped (SUPER_ADMIN's platform view) —
          *  ignored otherwise, since a scoped session's own channel always wins. */
-        UUID tenantId
+        UUID tenantId,
+        /** Every channel the product should be available in (V112). Null → unchanged on edit,
+         *  home channel only on create. Only channels the actor may manage are applied. */
+        java.util.List<UUID> tenantIds
 ) {}

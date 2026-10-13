@@ -1,6 +1,7 @@
 package com.sfa.controller;
 
 import com.sfa.dto.product.CreateProductRequest;
+import com.sfa.dto.product.CustomerCatalogItemDto;
 import com.sfa.dto.product.ProductDto;
 import com.sfa.dto.tenant.BulkAssignResultDto;
 import com.sfa.dto.tenant.BulkAssignTenantRequest;
@@ -42,6 +43,16 @@ public class ProductController {
         return productService.visibleToCustomer(customerId);
     }
 
+    /** Customer app catalog — the logged-in customer's products, each with its one resolved price. */
+    @GetMapping("/customer-catalog")
+    @PreAuthorize("hasRole('CUSTOMER')")
+    public List<CustomerCatalogItemDto> customerCatalog(@AuthenticationPrincipal UserDetailsImpl user) {
+        if (user.getLinkedCustomerId() == null) {
+            throw new com.sfa.exception.BusinessException("Your account is not linked to a customer record");
+        }
+        return productService.customerCatalog(user.getLinkedCustomerId());
+    }
+
     @GetMapping("/{id}")
     public ProductDto getById(@PathVariable UUID id) {
         return productService.getById(id);
@@ -57,8 +68,9 @@ public class ProductController {
 
     @PutMapping("/{id}")
     @PreAuthorize("hasAnyRole('SUPER_ADMIN','SALES_MANAGER')")
-    public ProductDto update(@PathVariable UUID id, @Valid @RequestBody CreateProductRequest req) {
-        return productService.update(id, req);
+    public ProductDto update(@PathVariable UUID id, @Valid @RequestBody CreateProductRequest req,
+                             @AuthenticationPrincipal UserDetailsImpl principal) {
+        return productService.update(id, req, principal.getId());
     }
 
     @DeleteMapping("/{id}")
@@ -71,7 +83,8 @@ public class ProductController {
     @PostMapping("/bulk-assign-tenant")
     @PreAuthorize("hasRole('SUPER_ADMIN')")
     @RequiresLicense(LicensedPackage.MULTI_TENANT)
-    public BulkAssignResultDto bulkAssignTenant(@Valid @RequestBody BulkAssignTenantRequest req) {
-        return productService.bulkAssignTenant(req);
+    public BulkAssignResultDto bulkAssignTenant(@Valid @RequestBody BulkAssignTenantRequest req,
+                                                @AuthenticationPrincipal UserDetailsImpl principal) {
+        return productService.bulkAssignTenant(req, principal.getId());
     }
 }

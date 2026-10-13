@@ -40,4 +40,6 @@ public class Role {
     public static final String SALES_REP      = "SALES_REP";
     public static final String FINANCE_USER   = "FINANCE_USER";
     public static final String CUSTOMER       = "CUSTOMER";
+    /** Self-service portal access for a distributor — sees only orders placed under it. */
+    public static final String DISTRIBUTOR    = "DISTRIBUTOR";
 }

@@ -27,7 +27,9 @@ public record PromotionResponseDto(
         Instant updatedAt,
         UUID tenantId,
         String tenantCode,
-        String tenantName
+        String tenantName,
+        /** Every channel this is available in (V112). */
+        java.util.List<java.util.UUID> channelIds
 ) {
     public record ProductSummary(UUID id, String name, String productCode) {}
     public record CustomerSummary(UUID id, String name, String customerCode) {}
@@ -60,7 +62,8 @@ public record PromotionResponseDto(
                 p.getUpdatedAt(),
                 p.getTenant() != null ? p.getTenant().getId() : null,
                 p.getTenant() != null ? p.getTenant().getCode() : null,
-                p.getTenant() != null ? p.getTenant().getName() : null
+                p.getTenant() != null ? p.getTenant().getName() : null,
+                java.util.List.copyOf(p.getChannelIds())
         );
     }
 }

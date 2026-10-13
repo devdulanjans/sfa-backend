@@ -14,6 +14,7 @@ public record CustomerDto(
         String contactPerson,
         String phone,
         String email,
+        String whatsappNumber,
         String location,
         String placeOfSupplier,
         String taxNumber,
@@ -36,7 +37,16 @@ public record CustomerDto(
         int branchCount,
         UUID tenantId,
         String tenantCode,
-        String tenantName
+        String tenantName,
+        /** Every channel this is available in (V112). */
+        java.util.List<java.util.UUID> channelIds,
+        Double latitude,
+        Double longitude,
+        /** The route a rep suggested this customer for (V113) — null once added or dismissed. */
+        UUID suggestedRouteId,
+        String suggestedRouteName,
+        String suggestedByName,
+        java.time.Instant suggestedAt
 ) {
     public static CustomerDto from(Customer c) {
         List<UUID> productIds = Hibernate.isInitialized(c.getAssignedProducts())
@@ -97,6 +107,7 @@ public record CustomerDto(
                 c.getContactPerson(),
                 c.getPhone(),
                 c.getEmail(),
+                c.getWhatsappNumber(),
                 c.getLocation(),
                 c.getPlaceOfSupplier(),
                 c.getTaxNumber(),
@@ -119,7 +130,14 @@ public record CustomerDto(
                 branchCount,
                 c.getTenant() != null ? c.getTenant().getId() : null,
                 c.getTenant() != null ? c.getTenant().getCode() : null,
-                c.getTenant() != null ? c.getTenant().getName() : null
+                c.getTenant() != null ? c.getTenant().getName() : null,
+                java.util.List.copyOf(c.getChannelIds()),
+                c.getLatitude() != null ? c.getLatitude().doubleValue() : null,
+                c.getLongitude() != null ? c.getLongitude().doubleValue() : null,
+                c.getSuggestedRoute() != null ? c.getSuggestedRoute().getId() : null,
+                c.getSuggestedRoute() != null ? c.getSuggestedRoute().getName() : null,
+                c.getSuggestedBy() != null ? c.getSuggestedBy().getFullName() : null,
+                c.getSuggestedAt()
         );
     }
 }

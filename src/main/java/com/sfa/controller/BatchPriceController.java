@@ -41,6 +41,7 @@ public class BatchPriceController {
     private final PromotionRepository         promotionRepository;
     private final PromotionEditLogRepository  editLogRepository;
     private final TenantAccessService         tenantAccessService;
+    private final com.sfa.service.ChannelMembershipService channelMembershipService;
     private final ObjectMapper                objectMapper;
 
     // ── Batch prices ──────────────────────────────────────────────────────────
@@ -113,6 +114,7 @@ public class BatchPriceController {
         BatchPrice bp = new BatchPrice();
         applyBatchPriceBody(bp, body);
         resolveTenant(body, principal, "batch price").ifPresent(bp::setTenant);
+        channelMembershipService.initChannels(bp, channelIdsFrom(body), principal.getId());
         BatchPrice saved = batchPriceRepository.save(bp);
         return ResponseEntity.created(URI.create("/api/batch-prices/" + saved.getId())).body(saved);
     }
@@ -120,11 +122,13 @@ public class BatchPriceController {
     @PutMapping("/api/batch-prices/{id}")
     @PreAuthorize("hasAnyRole('SUPER_ADMIN','SALES_MANAGER')")
     public ResponseEntity<BatchPrice> updateBatchPrice(
-            @PathVariable UUID id, @RequestBody Map<String, Object> body) {
+            @PathVariable UUID id, @RequestBody Map<String, Object> body,
+            @AuthenticationPrincipal UserDetailsImpl principal) {
         BatchPrice bp = batchPriceRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("BatchPrice", id));
         bp = TenantGuard.requireVisible(bp, "BatchPrice", id);
         applyBatchPriceBody(bp, body);
+        channelMembershipService.setChannels(bp, channelIdsFrom(body), principal.getId());
         return ResponseEntity.ok(batchPriceRepository.save(bp));
     }
 
@@ -178,6 +182,15 @@ public class BatchPriceController {
 
     private String blankToNull(String s) {
         return (s == null || s.isBlank()) ? null : s;
+    }
+
+    /** The body's "tenantIds" — every channel the row should be available in (V112) — or null
+     *  when absent, meaning "leave the channels as they are". */
+    private static List<UUID> channelIdsFrom(Map<String, Object> body) {
+        Object raw = body.get("tenantIds");
+        if (!(raw instanceof List<?> list)) return null;
+        return list.stream().filter(java.util.Objects::nonNull).map(Object::toString)
+                .filter(v -> !v.isBlank()).map(UUID::fromString).toList();
     }
 
     /** Create-time only — an explicit channel from a multi-channel actor's picker (or
@@ -258,6 +271,7 @@ public class BatchPriceController {
         Promotion promo = new Promotion();
         applyPromotionBody(promo, body);
         resolveTenant(body, principal, "promotion").ifPresent(promo::setTenant);
+        channelMembershipService.initChannels(promo, channelIdsFrom(body), principal.getId());
         Promotion saved = promotionRepository.save(promo);
         return ResponseEntity.created(URI.create("/api/promotions/" + saved.getId()))
                 .body(PromotionResponseDto.from(saved));
@@ -273,6 +287,7 @@ public class BatchPriceController {
         Promotion promo = promotionRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Promotion", id));
         promo = TenantGuard.requireVisible(promo, "Promotion", id);
+        channelMembershipService.setChannels(promo, channelIdsFrom(body), principal.getId());
 
         // ── Snapshot before ───────────────────────────────────────────────────
         String        beforeName   = promo.getName();

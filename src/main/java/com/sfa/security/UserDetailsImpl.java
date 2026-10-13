@@ -19,6 +19,7 @@ public class UserDetailsImpl implements UserDetails {
     @Getter private final UUID        id;
     @Getter private final String      roleName;
     @Getter private final UUID        linkedCustomerId;
+    @Getter private final UUID        linkedDistributorId;
     @Getter private final Set<UUID>   assignedCustomerIds;
     private final String   username;
     private final String   password;
@@ -33,6 +34,7 @@ public class UserDetailsImpl implements UserDetails {
         this.active      = user.getStatus() == User.UserStatus.ACTIVE;
         this.authorities = List.of(new SimpleGrantedAuthority("ROLE_" + roleName));
         this.linkedCustomerId = user.getCustomer() != null ? user.getCustomer().getId() : null;
+        this.linkedDistributorId = user.getLoginDistributor() != null ? user.getLoginDistributor().getId() : null;
         // Lazy load is safe here — UserDetailsServiceImpl.loadUserByUsername is @Transactional.
         // Effective scope is direct assignedCustomers UNION every assigned CustomerGroup's
         // members — still empty overall means "all customers" (unchanged from before groups

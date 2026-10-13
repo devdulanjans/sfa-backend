@@ -17,7 +17,7 @@ import java.util.UUID;
     @UniqueConstraint(name = "uk_company_profile_tenant", columnNames = {"tenant_id"})
 })
 @EntityListeners({AuditingEntityListener.class, TenantAwareEntityListener.class})
-@Filter(name = "tenantFilter", condition = "tenant_id = :tenantId")
+@Filter(name = "tenantFilter", condition = "tenant_id in (:tenantIds)")
 @Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor
 public class CompanyProfile implements TenantScoped {
 

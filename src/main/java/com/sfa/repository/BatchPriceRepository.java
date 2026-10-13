@@ -4,6 +4,7 @@ import com.sfa.entity.BatchPrice;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -219,4 +220,6 @@ public interface BatchPriceRepository extends JpaRepository<BatchPrice, UUID> {
     List<UUID> findActiveGroupProductIdsVisibleToCustomer(
             @Param("customerId") UUID customerId,
             @Param("date") LocalDate date);
+
+    List<BatchPrice> findByProductId(UUID productId);
 }

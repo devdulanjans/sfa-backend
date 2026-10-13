@@ -6,6 +6,9 @@ import com.sfa.dto.invoice.InvoiceSummaryDto;
 import com.sfa.entity.Invoice;
 import com.sfa.entity.Role;
 import com.sfa.license.LicensedPackage;
+import com.sfa.notification.CustomerNotificationService;
+import com.sfa.notification.CustomerNotificationService.ShareRequest;
+import com.sfa.notification.CustomerNotificationService.ShareResult;
 import com.sfa.license.RequiresLicense;
 import com.sfa.security.UserDetailsImpl;
 import com.sfa.service.DetailedExportGenerator;
@@ -47,6 +50,7 @@ public class InvoiceController {
     private final InvoiceExportGenerator invoiceExportGenerator;
     private final DetailedExportGenerator detailedExportGenerator;
     private final InvoicePaymentService invoicePaymentService;
+    private final CustomerNotificationService notificationService;
 
     @GetMapping
     @Operation(summary = "List invoices with optional filters")
@@ -141,6 +145,15 @@ public class InvoiceController {
             @PathVariable UUID orderId,
             @AuthenticationPrincipal UserDetailsImpl user) {
         return ResponseEntity.ok(invoiceService.generateInvoice(orderId, user.getId()));
+    }
+
+    @PostMapping("/{id}/share")
+    // Portal logins (customer / distributor) could otherwise point the send at any address.
+    @PreAuthorize("isAuthenticated() and !hasAnyRole('CUSTOMER','DISTRIBUTOR')")
+    @Operation(summary = "Send the invoice details to the customer by email and/or WhatsApp")
+    public ResponseEntity<List<ShareResult>> share(@PathVariable UUID id,
+                                                   @RequestBody(required = false) ShareRequest request) {
+        return ResponseEntity.ok(notificationService.shareInvoice(id, request));
     }
 
     @GetMapping("/{id}")

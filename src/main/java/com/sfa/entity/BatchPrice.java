@@ -13,6 +13,8 @@ import com.sfa.security.TenantAwareEntityListener;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.UUID;
 
 @Entity
@@ -23,9 +25,10 @@ import java.util.UUID;
     @Index(name = "idx_bp_tenant",        columnList = "tenant_id")
 })
 @EntityListeners({AuditingEntityListener.class, TenantAwareEntityListener.class})
-@Filter(name = "tenantFilter", condition = "tenant_id = :tenantId")
+@Filter(name = "tenantFilter", deduceAliasInjectionPoints = false,
+        condition = "{alias}.id in (select mc.batch_price_id from batch_price_channels mc where mc.tenant_id in (:tenantIds))")
 @Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor
-public class BatchPrice implements TenantScoped {
+public class BatchPrice implements MultiChannelScoped {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
@@ -38,6 +41,14 @@ public class BatchPrice implements TenantScoped {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "tenant_id", nullable = false)
     private Tenant tenant;
+
+    /** Every channel this row is available in (home channel included) — see V112. */
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(name = "batch_price_channels", joinColumns = @JoinColumn(name = "batch_price_id"))
+    @Column(name = "tenant_id")
+    @org.hibernate.annotations.BatchSize(size = 100)
+    @Builder.Default
+    private Set<UUID> channelIds = new HashSet<>();
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "product_id")
@@ -78,4 +89,9 @@ public class BatchPrice implements TenantScoped {
     @LastModifiedDate
     @Column(name = "updated_at")
     private Instant updatedAt;
+
+    @PrePersist
+    void addHomeChannel() {
+        ensureHomeChannel();
+    }
 }

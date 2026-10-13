@@ -22,9 +22,10 @@ import java.util.UUID;
     @Index(name = "idx_promo_tenant",       columnList = "tenant_id")
 })
 @EntityListeners({AuditingEntityListener.class, TenantAwareEntityListener.class})
-@Filter(name = "tenantFilter", condition = "tenant_id = :tenantId")
+@Filter(name = "tenantFilter", deduceAliasInjectionPoints = false,
+        condition = "{alias}.id in (select mc.promotion_id from promotion_channels mc where mc.tenant_id in (:tenantIds))")
 @Getter @Setter @Builder(toBuilder = true) @NoArgsConstructor @AllArgsConstructor
-public class Promotion implements TenantScoped {
+public class Promotion implements MultiChannelScoped {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
@@ -36,6 +37,15 @@ public class Promotion implements TenantScoped {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "tenant_id", nullable = false)
     private Tenant tenant;
+
+    /** Every channel this row is available in (home channel included) — see V112. */
+    @ElementCollection(fetch = FetchType.LAZY)
+    @CollectionTable(name = "promotion_channels", joinColumns = @JoinColumn(name = "promotion_id"))
+    @Column(name = "tenant_id")
+    @org.hibernate.annotations.BatchSize(size = 100)
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    @Builder.Default
+    private Set<UUID> channelIds = new HashSet<>();
 
     @Column(nullable = false, length = 200)
     private String name;
@@ -106,4 +116,9 @@ public class Promotion implements TenantScoped {
     }
 
     public enum PromotionType { PERCENTAGE, FIXED_AMOUNT, FREE_PRODUCT }
+
+    @PrePersist
+    void addHomeChannel() {
+        ensureHomeChannel();
+    }
 }

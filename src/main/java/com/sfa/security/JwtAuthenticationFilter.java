@@ -1,5 +1,7 @@
 package com.sfa.security;
 
+import com.sfa.entity.Role;
+import com.sfa.service.CustomerChannelService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -25,6 +27,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtTokenProvider jwtTokenProvider;
     private final UserDetailsService userDetailsService;
+    private final CustomerChannelService customerChannelService;
 
     private static final java.util.Set<String> UNSCOPED_ROLES =
             java.util.Set.of("SUPER_ADMIN", "PLATFORM_OWNER");
@@ -51,7 +54,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 // platform-wide session.
                 UUID tenantId = jwtTokenProvider.getTenantIdFromToken(token);
                 String roleName = userDetails instanceof UserDetailsImpl impl ? impl.getRoleName() : null;
-                if (tenantId != null) {
+                if (tenantId != null && Role.CUSTOMER.equals(roleName)) {
+                    // Customer portal: reads span every channel the customer can order from
+                    // (catalog, orders, promotions); the tid is only the channel new rows default to.
+                    UserDetailsImpl impl = (UserDetailsImpl) userDetails;
+                    TenantContext.setTenant(tenantId,
+                            customerChannelService.channelIdsFor(impl.getId(), impl.getLinkedCustomerId()));
+                } else if (tenantId != null) {
                     TenantContext.setTenant(tenantId);
                 } else if (roleName != null && UNSCOPED_ROLES.contains(roleName)) {
                     TenantContext.setUnscoped();

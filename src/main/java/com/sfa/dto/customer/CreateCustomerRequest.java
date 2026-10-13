@@ -1,6 +1,8 @@
 package com.sfa.dto.customer;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.DecimalMax;
+import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.Size;
@@ -14,6 +16,7 @@ public record CreateCustomerRequest(
         String contactPerson,
         String phone,
         String email,
+        @Size(max = 20) String whatsappNumber,
         @Size(max = 100) String location,
         @Size(max = 150) String placeOfSupplier,
         String taxNumber,
@@ -29,5 +32,10 @@ public record CreateCustomerRequest(
         java.util.UUID parentCustomerId,
         /** Only consulted for an actor who may pick a channel explicitly (SUPER_ADMIN,
          *  or any actor managing more than one channel) — ignored otherwise. */
-        java.util.UUID tenantId
+        java.util.UUID tenantId,
+        @DecimalMin("-90") @DecimalMax("90") BigDecimal latitude,
+        @DecimalMin("-180") @DecimalMax("180") BigDecimal longitude,
+        /** Every channel the customer should be available in (V112). Null → unchanged on edit,
+         *  home channel only on create. Only channels the actor may manage are applied. */
+        List<java.util.UUID> tenantIds
 ) {}

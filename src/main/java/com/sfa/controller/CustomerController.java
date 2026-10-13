@@ -152,15 +152,17 @@ public class CustomerController {
     @PutMapping("/{id}")
     @PreAuthorize("hasAnyRole('SUPER_ADMIN','SALES_MANAGER')")
     @RequiresLicense(LicensedPackage.SFA)
-    public CustomerDto update(@PathVariable UUID id, @Valid @RequestBody CreateCustomerRequest req) {
-        return customerService.update(id, req);
+    public CustomerDto update(@PathVariable UUID id, @Valid @RequestBody CreateCustomerRequest req,
+                              @AuthenticationPrincipal UserDetailsImpl principal) {
+        return customerService.update(id, req, principal.getId());
     }
 
     @PostMapping("/bulk-assign-tenant")
     @PreAuthorize("hasRole('SUPER_ADMIN')")
     @RequiresLicense(LicensedPackage.MULTI_TENANT)
-    public BulkAssignResultDto bulkAssignTenant(@Valid @RequestBody BulkAssignTenantRequest req) {
-        return customerService.bulkAssignTenant(req);
+    public BulkAssignResultDto bulkAssignTenant(@Valid @RequestBody BulkAssignTenantRequest req,
+                                                @AuthenticationPrincipal UserDetailsImpl principal) {
+        return customerService.bulkAssignTenant(req, principal.getId());
     }
 
     @DeleteMapping("/{id}")

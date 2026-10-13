@@ -65,6 +65,14 @@ public class User {
     @JoinColumn(name = "customer_id")
     private Customer customer;
 
+    /** For DISTRIBUTOR role: the single distributor this login represents in the self-service
+     *  portal — e.g. sees only orders placed under it (see OrderService.buildOrderSpec).
+     *  Deliberately separate from {@link #distributors} below, which means something else
+     *  entirely: "which distributors can a SALES_REP place orders under". */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "login_distributor_id")
+    private Distributor loginDistributor;
+
     @JsonIgnore
     @ManyToMany(fetch = FetchType.LAZY)
     @JoinTable(

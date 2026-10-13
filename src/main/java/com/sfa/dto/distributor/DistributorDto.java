@@ -1,8 +1,10 @@
 package com.sfa.dto.distributor;
 
+import com.sfa.dto.tenant.TenantDto;
 import com.sfa.entity.Distributor;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 public record DistributorDto(
@@ -13,9 +15,13 @@ public record DistributorDto(
         String  phone,
         String  email,
         String  status,
-        Instant createdAt
+        Instant createdAt,
+        List<TenantDto> tenants
 ) {
     public static DistributorDto from(Distributor d) {
+        List<TenantDto> tenants = d.getTenants() != null
+                ? d.getTenants().stream().map(TenantDto::from).toList()
+                : List.of();
         return new DistributorDto(
                 d.getId(),
                 d.getCode(),
@@ -24,7 +30,8 @@ public record DistributorDto(
                 d.getPhone(),
                 d.getEmail(),
                 d.getStatus() != null ? d.getStatus().name() : null,
-                d.getCreatedAt()
+                d.getCreatedAt(),
+                tenants
         );
     }
 }

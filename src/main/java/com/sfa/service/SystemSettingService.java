@@ -23,6 +23,20 @@ public class SystemSettingService {
         return repo.findAll();
     }
 
+    /** A boolean setting, or {@code def} when missing. */
+    @Transactional(readOnly = true)
+    public boolean getBool(String key, boolean def) {
+        return repo.findById(key).map(s -> Boolean.parseBoolean(s.getValue().trim())).orElse(def);
+    }
+
+    /** An integer setting, or {@code def} when missing or not a number. */
+    @Transactional(readOnly = true)
+    public int getInt(String key, int def) {
+        return repo.findById(key).map(s -> {
+            try { return Integer.parseInt(s.getValue().trim()); } catch (NumberFormatException e) { return def; }
+        }).orElse(def);
+    }
+
     @Transactional(readOnly = true)
     public boolean isOrderPrevent() {
         return repo.findById("isOrderPrevent")
@@ -70,6 +84,21 @@ public class SystemSettingService {
         return repo.findById("promotion_manual_selection")
                 .map(s -> Boolean.parseBoolean(s.getValue()))
                 .orElse(true);
+    }
+
+    @Transactional(readOnly = true)
+    public boolean isLeadAutoConvertEnabled() {
+        return repo.findById("lead_auto_convert_to_customer")
+                .map(s -> Boolean.parseBoolean(s.getValue()))
+                .orElse(false);
+    }
+
+    /** Global switch for sales routes — off unless enabled (see V110). */
+    @Transactional(readOnly = true)
+    public boolean isSalesRoutesEnabled() {
+        return repo.findById("sales_routes_enabled")
+                .map(s -> Boolean.parseBoolean(s.getValue()))
+                .orElse(false);
     }
 
     public SystemSetting update(String key, String value, UUID updatedBy) {

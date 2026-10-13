@@ -187,11 +187,12 @@ public class CustomerImportService {
                     }
 
                     CreateCustomerRequest req = new CreateCustomerRequest(
-                            code, name.trim(), blankToNull(contactPerson), blankToNull(phone), blankToNull(email),
+                            code, name.trim(), blankToNull(contactPerson), blankToNull(phone), blankToNull(email), null,
                             blankToNull(location), blankToNull(placeOfSupplier), blankToNull(taxNumber), resolvedTaxType, null, null, resolvedVisibility,
                             creditLimit, creditDays, null, false,
                             List.of(new AddressRequest(label, addressLine.trim())),
-                            parentCustomerId, null);
+                            parentCustomerId, null, null, null,
+                null);
 
                     customerService.create(req, actingUserId);
                     successCount++;

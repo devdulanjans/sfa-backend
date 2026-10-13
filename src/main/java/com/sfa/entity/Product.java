@@ -25,9 +25,10 @@ import java.util.UUID;
     @UniqueConstraint(name = "uk_products_tenant_code", columnNames = {"tenant_id", "product_code"})
 })
 @EntityListeners({AuditingEntityListener.class, TenantAwareEntityListener.class})
-@Filter(name = "tenantFilter", condition = "tenant_id = :tenantId")
+@Filter(name = "tenantFilter", deduceAliasInjectionPoints = false,
+        condition = "{alias}.id in (select mc.product_id from product_channels mc where mc.tenant_id in (:tenantIds))")
 @Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor
-public class Product implements TenantScoped {
+public class Product implements MultiChannelScoped {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
@@ -36,6 +37,15 @@ public class Product implements TenantScoped {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "tenant_id", nullable = false)
     private Tenant tenant;
+
+    /** Every channel this row is available in (home channel included) — see V112. */
+    @ElementCollection(fetch = FetchType.LAZY)
+    @CollectionTable(name = "product_channels", joinColumns = @JoinColumn(name = "product_id"))
+    @Column(name = "tenant_id")
+    @org.hibernate.annotations.BatchSize(size = 100)
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    @Builder.Default
+    private Set<UUID> channelIds = new HashSet<>();
 
     @Column(name = "product_code", nullable = false, length = 30)
     private String productCode;
@@ -91,4 +101,9 @@ public class Product implements TenantScoped {
     private Instant updatedAt;
 
     public enum ProductStatus { ACTIVE, INACTIVE, DISCONTINUED }
+
+    @PrePersist
+    void addHomeChannel() {
+        ensureHomeChannel();
+    }
 }

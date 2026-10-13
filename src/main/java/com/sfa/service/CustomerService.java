@@ -52,6 +52,7 @@ public class CustomerService {
     private final OrderRepository orderRepository;
     private final ProductRepository productRepository;
     private final TenantAccessService tenantAccessService;
+    private final ChannelMembershipService channelMembershipService;
     private final AuditLogService auditLogService;
 
     @PersistenceContext
@@ -166,27 +167,31 @@ public class CustomerService {
         applyFields(c, req);
         tenantAccessService.resolveExplicitTenant(req.tenantId(), actingUserId, "customer")
                 .ifPresent(c::setTenant);
+        channelMembershipService.initChannels(c, req.tenantIds(), actingUserId);
         Customer saved = customerRepository.save(c);
         auditLogService.log(null, "CREATE", "Customer", saved.getId(), null, saved);
         return CustomerDto.from(saved);
     }
 
     @Transactional
-    public CustomerDto update(UUID id, CreateCustomerRequest req) {
+    public CustomerDto update(UUID id, CreateCustomerRequest req, UUID actingUserId) {
         Customer c = findOrThrow(id);
         Object before = CustomerDto.from(c);
         applyFields(c, req);
+        channelMembershipService.setChannels(c, req.tenantIds(), actingUserId);
         Customer saved = customerRepository.save(c);
         auditLogService.log(null, "UPDATE", "Customer", saved.getId(), before, CustomerDto.from(saved));
         return CustomerDto.from(saved);
     }
 
-    /** Moves a batch of existing customers into a different channel — SUPER_ADMIN only
-     *  (see CustomerController), so every id is looked up unfiltered by channel. Each
-     *  row is validated/saved independently so one bad id doesn't fail the whole batch. */
+    /** Adds / removes / sets the channels a batch of customers is available in — SUPER_ADMIN only
+     *  (see CustomerController), so every id is looked up unfiltered by channel. Each row is
+     *  validated/saved independently so one bad id doesn't fail the whole batch. */
     @Transactional
-    public BulkAssignResultDto bulkAssignTenant(BulkAssignTenantRequest req) {
-        Tenant target = tenantAccessService.findTenantOrThrow(req.tenantId());
+    public BulkAssignResultDto bulkAssignTenant(BulkAssignTenantRequest req, UUID actingUserId) {
+        List<UUID> channels = req.channels();
+        if (channels.isEmpty()) throw new BusinessException("Select at least one channel.");
+        ChannelMembershipService.Mode mode = req.resolvedMode();
         List<BulkAssignResultDto.RowError> errors = new ArrayList<>();
         int successCount = 0;
 
@@ -197,15 +202,10 @@ public class CustomerService {
                 if (c == null) {
                     throw new ResourceNotFoundException("Customer", id);
                 }
-                if (c.getTenant() == null || !c.getTenant().getId().equals(target.getId())) {
-                    if (customerRepository.existsByTenantIdAndCustomerCodeAndIdNot(target.getId(), c.getCustomerCode(), c.getId())) {
-                        throw new BusinessException("Code \"" + c.getCustomerCode() + "\" already exists in " + target.getName());
-                    }
-                    Object before = CustomerDto.from(c);
-                    c.setTenant(target);
-                    Customer saved = customerRepository.save(c);
-                    auditLogService.log(null, "UPDATE", "Customer", saved.getId(), before, CustomerDto.from(saved));
-                }
+                Object before = CustomerDto.from(c);
+                channelMembershipService.modify(c, channels, mode, actingUserId);
+                Customer saved = customerRepository.save(c);
+                auditLogService.log(actingUserId, "UPDATE", "Customer", saved.getId(), before, CustomerDto.from(saved));
                 successCount++;
             } catch (Exception e) {
                 errors.add(new BulkAssignResultDto.RowError(id, label, e.getMessage()));
@@ -262,6 +262,7 @@ public class CustomerService {
         c.setContactPerson(req.contactPerson());
         c.setPhone(req.phone());
         c.setEmail(req.email());
+        c.setWhatsappNumber(req.whatsappNumber());
         c.setLocation(req.location());
         c.setPlaceOfSupplier(req.placeOfSupplier());
         c.setTaxNumber(req.taxNumber());
@@ -307,6 +308,8 @@ public class CustomerService {
             c.setSource(Customer.CustomerSource.valueOf(req.source()));
         }
         c.setSplitPromoInvoiceEnabled(req.splitPromoInvoiceEnabled());
+        c.setLatitude(req.latitude());
+        c.setLongitude(req.longitude());
 
         // Single-level branch hierarchy: a branch can never itself become a parent, and a
         // parent (has its own branches) can never become someone else's branch.

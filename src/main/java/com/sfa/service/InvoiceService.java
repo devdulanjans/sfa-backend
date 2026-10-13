@@ -7,6 +7,7 @@ import com.sfa.entity.JournalEntry;
 import com.sfa.entity.Order;
 import com.sfa.exception.BusinessException;
 import com.sfa.exception.ResourceNotFoundException;
+import com.sfa.notification.SalesDocumentEvent;
 import com.sfa.repository.ChartOfAccountRepository;
 import com.sfa.repository.InvoiceRepository;
 import com.sfa.repository.OrderRepository;
@@ -18,6 +19,7 @@ import jakarta.persistence.criteria.JoinType;
 import jakarta.persistence.criteria.Predicate;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
@@ -56,6 +58,7 @@ public class InvoiceService {
     private final AuditLogService          auditLog;
     private final JournalEntryService      journalEntryService;
     private final ChartOfAccountRepository accountRepo;
+    private final ApplicationEventPublisher events;
 
     @PersistenceContext
     private EntityManager em;
@@ -210,6 +213,7 @@ public class InvoiceService {
                 Map.of("invoiceNumber", saved.getInvoiceNumber(),
                        "status",        saved.getStatus().name(),
                        "total",         saved.getTotal()));
+        events.publishEvent(SalesDocumentEvent.invoiceGenerated(saved.getId()));
         return saved;
     }
 

@@ -53,6 +53,13 @@ public class UserController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
+    @GetMapping("/by-login-distributor/{distributorId}")
+    public ResponseEntity<UserDto> findByLoginDistributor(@PathVariable UUID distributorId) {
+        return userService.findByLoginDistributorId(distributorId)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.notFound().build());
+    }
+
     // Read-only reveal of the 'platformowner' / 'superadmin' recovery accounts —
     // never returned by list(), never editable through this or any other endpoint.
     @GetMapping("/recovery")

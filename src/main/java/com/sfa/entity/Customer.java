@@ -26,9 +26,10 @@ import java.util.UUID;
     @UniqueConstraint(name = "uk_customers_tenant_code", columnNames = {"tenant_id", "customer_code"})
 })
 @EntityListeners({AuditingEntityListener.class, TenantAwareEntityListener.class})
-@Filter(name = "tenantFilter", condition = "tenant_id = :tenantId")
+@Filter(name = "tenantFilter", deduceAliasInjectionPoints = false,
+        condition = "{alias}.id in (select mc.customer_id from customer_channels mc where mc.tenant_id in (:tenantIds))")
 @Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor
-public class Customer implements TenantScoped {
+public class Customer implements MultiChannelScoped {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
@@ -37,6 +38,15 @@ public class Customer implements TenantScoped {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "tenant_id", nullable = false)
     private Tenant tenant;
+
+    /** Every channel this row is available in (home channel included) — see V112. */
+    @ElementCollection(fetch = FetchType.LAZY)
+    @CollectionTable(name = "customer_channels", joinColumns = @JoinColumn(name = "customer_id"))
+    @Column(name = "tenant_id")
+    @org.hibernate.annotations.BatchSize(size = 100)
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    @Builder.Default
+    private Set<UUID> channelIds = new HashSet<>();
 
     @Column(name = "customer_code", nullable = false, length = 30)
     private String customerCode;
@@ -52,6 +62,9 @@ public class Customer implements TenantScoped {
 
     @Column(length = 120)
     private String email;
+
+    @Column(name = "whatsapp_number", length = 20)
+    private String whatsappNumber;
 
     @Column(length = 100)
     private String location;
@@ -149,8 +162,27 @@ public class Customer implements TenantScoped {
     @Column(name = "deleted_at")
     private Instant deletedAt;
 
+    // ── Route suggestion (V113) — the route a rep was working when they captured this ──
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "suggested_route_id")
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private SalesRoute suggestedRoute;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "suggested_by")
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private User suggestedBy;
+
+    @Column(name = "suggested_at")
+    private Instant suggestedAt;
+
     public enum TaxType       { STANDARD, EXEMPT, ZERO_RATED }
     public enum VisibilityRule { ALL, ASSIGNED }
     public enum CustomerStatus { ACTIVE, INACTIVE, SUSPENDED }
     public enum CustomerSource { MANUAL, POS }
+
+    @PrePersist
+    void addHomeChannel() {
+        ensureHomeChannel();
+    }
 }

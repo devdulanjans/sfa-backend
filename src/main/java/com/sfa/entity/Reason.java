@@ -10,7 +10,7 @@ import java.util.UUID;
 @Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor
 public class Reason {
 
-    public enum ReasonType { DAMAGE, RETURN }
+    public enum ReasonType { DAMAGE, RETURN, VISIT }
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)

@@ -21,7 +21,7 @@ import java.util.UUID;
     @Index(name = "idx_invoices_tenant",   columnList = "tenant_id")
 })
 @EntityListeners({AuditingEntityListener.class, TenantAwareEntityListener.class})
-@Filter(name = "tenantFilter", condition = "tenant_id = :tenantId")
+@Filter(name = "tenantFilter", condition = "tenant_id in (:tenantIds)")
 @Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor
 public class Invoice implements TenantScoped {
 

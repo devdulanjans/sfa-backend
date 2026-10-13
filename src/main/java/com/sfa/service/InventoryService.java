@@ -152,6 +152,7 @@ public class InventoryService {
             // in that product's channel regardless of who received the stock.
             batchPriceRepo.save(BatchPrice.builder()
                     .tenant(product.getTenant())
+                    .channelIds(new java.util.HashSet<>(product.getChannelIds()))
                     .product(product)
                     .minQty(BigDecimal.ONE)
                     .price(sellingPrice)

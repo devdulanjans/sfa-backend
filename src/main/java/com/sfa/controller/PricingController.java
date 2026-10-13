@@ -34,7 +34,7 @@ public class PricingController {
     /** Used by web admin (POST with JSON body). */
     @PostMapping("/resolve")
     public PriceResolveResponse resolve(@Valid @RequestBody PriceResolveRequest req) {
-        return doResolve(req.productId(), req.customerId(), req.promotionId());
+        return doResolve(req.productId(), req.customerId(), req.promotionId(), req.qty(), req.batchPriceId());
     }
 
     /** Used by mobile (GET with query params). */
@@ -42,13 +42,16 @@ public class PricingController {
     public PriceResolveResponse resolveGet(
             @RequestParam UUID productId,
             @RequestParam UUID customerId,
-            @RequestParam(required = false) UUID promotionId) {
-        return doResolve(productId, customerId, promotionId);
+            @RequestParam(required = false) UUID promotionId,
+            @RequestParam(required = false) BigDecimal qty,
+            @RequestParam(required = false) UUID batchPriceId) {
+        return doResolve(productId, customerId, promotionId, qty, batchPriceId);
     }
 
-    private PriceResolveResponse doResolve(UUID productId, UUID customerId, UUID promotionId) {
+    private PriceResolveResponse doResolve(UUID productId, UUID customerId, UUID promotionId,
+                                            BigDecimal qty, UUID batchPriceId) {
         PricingEngine.PriceResult r = pricingEngine.resolve(productId, customerId,
-                BigDecimal.ONE, null, promotionId);
+                qty != null ? qty : BigDecimal.ONE, batchPriceId, promotionId);
         PriceResolveResponse.FreeProduct fp = r.freeProduct() == null ? null
                 : new PriceResolveResponse.FreeProduct(
                         r.freeProduct().id(),
@@ -56,8 +59,9 @@ public class PricingController {
                         r.freeProduct().productCode(),
                         r.freeProduct().maxFreeCount(),
                         r.freeProduct().minOrderQty(),
-                        r.freeProduct().applicableProductIds());
-        return new PriceResolveResponse(r.unitPrice(), r.source(), r.promotionName(), r.maxDiscountAmount(), r.taxPct(), fp);
+                        r.freeProduct().applicableProductIds(),
+                        r.freeProduct().promotionId());
+        return new PriceResolveResponse(r.unitPrice(), r.source(), r.promotionName(), r.maxDiscountAmount(), r.taxPct(), fp, r.basePrice());
     }
 
     /**

@@ -64,9 +64,18 @@ public class TenantFilterInterceptor implements HandlerInterceptor {
             return false;
         }
 
-        Session session = entityManager.unwrap(Session.class);
-        session.enableFilter(FILTER_NAME).setParameter("tenantId", tenantId);
+        bindFilter(entityManager.unwrap(Session.class));
         return true;
+    }
+
+    /** (Re)binds the filter to whatever TenantContext currently holds — also used by
+     *  {@link TenantScope} when it narrows a request to one channel mid-flight. */
+    static void bindFilter(Session session) {
+        if (TenantContext.isUnscoped()) {
+            session.disableFilter(FILTER_NAME);
+            return;
+        }
+        session.enableFilter(FILTER_NAME).setParameterList("tenantIds", TenantContext.getVisibleTenantIds());
     }
 
     private boolean isExempt(String requestUri) {

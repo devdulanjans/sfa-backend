@@ -6,9 +6,13 @@ import com.sfa.dto.order.OrderResponseDto;
 import com.sfa.entity.*;
 import com.sfa.exception.BusinessException;
 import com.sfa.exception.ResourceNotFoundException;
+import com.sfa.notification.SalesDocumentEvent;
 import com.sfa.repository.*;
+import com.sfa.security.TenantContext;
 import com.sfa.security.TenantGuard;
+import com.sfa.security.TenantScope;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
@@ -26,6 +30,7 @@ import java.time.LocalDate;
 import java.time.Year;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -48,11 +53,42 @@ public class OrderService {
     private final InvoiceService         invoiceService;
     private final InventoryService       inventoryService;
     private final PromotionRepository    promotionRepo;
+    private final ApplicationEventPublisher events;
+    private final TenantScope            tenantScope;
 
     @PersistenceContext
     private EntityManager em;
 
     public Order createOrder(CreateOrderRequest request, UUID salesRepId) {
+        Order order = buildOrder(request, salesRepId, true);
+        User salesRep = order.getSalesRep();
+        Order.OrderSource orderSource = order.getOrderSource();
+
+        Order saved = orderRepo.save(order);
+        auditLog.log(salesRepId, "CREATE", "ORDER", saved.getId(), null,
+                Map.of("orderNumber", saved.getOrderNumber(),
+                       "status",      saved.getStatus().name(),
+                       "source",      saved.getOrderSource().name(),
+                       "total",       saved.getTotal()));
+
+        if (systemSettingService.isOrderPrevent() && orderSource != Order.OrderSource.CUSTOMER_APP) {
+            saved.setStatus(Order.OrderStatus.APPROVED);
+            saved.setApprovedBy(salesRep);
+            saved.setApprovedAt(Instant.now());
+            saved = orderRepo.save(saved);
+            auditLog.log(salesRepId, "AUTO_APPROVE", "ORDER", saved.getId(), Order.OrderStatus.DRAFT, Order.OrderStatus.APPROVED);
+            invoiceService.generateInvoice(saved.getId(), salesRepId);
+        }
+
+        return saved;
+    }
+
+    /**
+     * Prices a cart into an (unsaved) Order — shared by createOrder and quoteAsCustomer, so the
+     * price a customer is quoted is computed by exactly the same code that later charges it.
+     * {@code assignNumber} false for a quote, which must not consume an order number.
+     */
+    private Order buildOrder(CreateOrderRequest request, UUID salesRepId, boolean assignNumber) {
         User salesRep = userRepo.findById(salesRepId)
                 .orElseThrow(() -> new ResourceNotFoundException("User", salesRepId));
 
@@ -73,8 +109,12 @@ public class OrderService {
         Customer customer = customerRepo.findById(customerId)
                 .orElseThrow(() -> new ResourceNotFoundException("Customer", customerId));
         // @Filter doesn't cover a by-id lookup — without this, a channel-scoped rep could
-        // place an order against another channel's customer by guessing its id.
-        customer = TenantGuard.requireVisible(customer, "Customer", customerId);
+        // place an order against another channel's customer by guessing its id. Not needed
+        // for a customer-portal order: the customer comes from the login itself, and its
+        // record may legitimately sit in a different channel than the one being ordered from.
+        if (orderSource != Order.OrderSource.CUSTOMER_APP) {
+            customer = TenantGuard.requireVisible(customer, "Customer", customerId);
+        }
 
         if (Role.SALES_REP.equals(salesRep.getRole().getName())) {
             Set<UUID> assignedIds = salesRep.getAssignedCustomers().stream()
@@ -90,7 +130,7 @@ public class OrderService {
                 : null;
 
         Order order = Order.builder()
-                .orderNumber(generateOrderNumber())
+                .orderNumber(assignNumber ? generateOrderNumber() : null)
                 .customer(customer)
                 .salesRep(salesRep)
                 .distributor(distributor)
@@ -118,12 +158,22 @@ public class OrderService {
             Product product = productRepo.findById(itemReq.productId())
                     .orElseThrow(() -> new ResourceNotFoundException("Product", itemReq.productId()));
             product = TenantGuard.requireVisible(product, "Product", itemReq.productId());
+            // An order belongs to exactly one channel, and every product on it must be available
+            // in that channel. A customer-portal session can SEE several channels, so mixed carts
+            // go through checkoutAsCustomer, which splits them per channel.
+            if (!TenantContext.isUnscoped()
+                    && !product.getChannelIds().contains(TenantContext.getTenantId())) {
+                throw new BusinessException("\"" + product.getName()
+                        + "\" isn't available in this channel — order it separately.");
+            }
 
             PricingEngine.LineItemResult line = pricingEngine.calculateLine(
                     itemReq.productId(),
                     customerId,
                     itemReq.quantity(),
-                    itemReq.discountPct(),
+                    // A customer never sets their own discount — promotions are already applied
+                    // by the pricing engine, so a client-sent discount would stack on top of it.
+                    orderSource == Order.OrderSource.CUSTOMER_APP ? null : itemReq.discountPct(),
                     itemReq.batchPriceId(),
                     itemReq.promotionId());
 
@@ -179,23 +229,79 @@ public class OrderService {
         }
 
         order.recalculateTotals();
-        Order saved = orderRepo.save(order);
-        auditLog.log(salesRepId, "CREATE", "ORDER", saved.getId(), null,
-                Map.of("orderNumber", saved.getOrderNumber(),
-                       "status",      saved.getStatus().name(),
-                       "source",      saved.getOrderSource().name(),
-                       "total",       saved.getTotal()));
+        return order;
+    }
 
-        if (systemSettingService.isOrderPrevent() && orderSource != Order.OrderSource.CUSTOMER_APP) {
-            saved.setStatus(Order.OrderStatus.APPROVED);
-            saved.setApprovedBy(salesRep);
-            saved.setApprovedAt(Instant.now());
-            saved = orderRepo.save(saved);
-            auditLog.log(salesRepId, "AUTO_APPROVE", "ORDER", saved.getId(), Order.OrderStatus.DRAFT, Order.OrderStatus.APPROVED);
-            invoiceService.generateInvoice(saved.getId(), salesRepId);
+    /**
+     * Customer-app checkout. A customer can order from several channels at once, but each
+     * order belongs to exactly one — so the cart is split into one order per channel (in the
+     * order the channels first appear in the cart), each created and submitted scoped to just
+     * its own channel so pricing, promotions and the order's channel stamp only see that one.
+     * All-or-nothing: runs in one transaction, so a failure on any channel creates no orders.
+     */
+    public List<Order> checkoutAsCustomer(CreateOrderRequest request, UUID userId) {
+        requireCustomerAccount(userId);
+
+        Map<UUID, List<OrderItemRequest>> itemsByChannel = groupItemsByChannel(request.items());
+        List<Order> orders = new ArrayList<>();
+        itemsByChannel.forEach((tenantId, items) -> orders.add(tenantScope.callInChannel(tenantId, () -> {
+            Order created = createOrder(channelRequest(request, items, itemsByChannel.size()), userId);
+            return submitOrder(created.getId(), userId);
+        })));
+        return orders;
+    }
+
+    /**
+     * Customer-app cart quote: prices the cart exactly as {@link #checkoutAsCustomer} would —
+     * same split per channel, same pricing engine (customer price → promotion → batch price →
+     * default, tier by qty, promotion free items) — without saving anything. The app shows this
+     * instead of computing prices itself, so the price shown is always the price charged.
+     */
+    @Transactional(readOnly = true)
+    public List<Order> quoteAsCustomer(CreateOrderRequest request, UUID userId) {
+        requireCustomerAccount(userId);
+        Map<UUID, List<OrderItemRequest>> itemsByChannel = groupItemsByChannel(request.items());
+        List<Order> quotes = new ArrayList<>();
+        itemsByChannel.forEach((tenantId, items) -> quotes.add(tenantScope.callInChannel(tenantId, () -> {
+            Order quote = buildOrder(channelRequest(request, items, itemsByChannel.size()), userId, false);
+            quote.setTenant(em.find(Tenant.class, tenantId));
+            return quote;
+        })));
+        return quotes;
+    }
+
+    private void requireCustomerAccount(UUID userId) {
+        User user = userRepo.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User", userId));
+        if (!Role.CUSTOMER.equals(user.getRole().getName())) {
+            throw new BusinessException("Only available to customer accounts");
         }
+    }
 
-        return saved;
+    /** Cart lines grouped by the channel each product is ordered in (see ChannelChoice), in first-seen order. */
+    private Map<UUID, List<OrderItemRequest>> groupItemsByChannel(List<OrderItemRequest> items) {
+        Map<UUID, List<OrderItemRequest>> byChannel = new LinkedHashMap<>();
+        for (OrderItemRequest item : items) {
+            Product product = productRepo.findById(item.productId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Product", item.productId()));
+            product = TenantGuard.requireVisible(product, "Product", item.productId());
+            UUID channel = com.sfa.security.ChannelChoice.orderChannelFor(product);
+            if (channel == null) {
+                throw new BusinessException("\"" + product.getName() + "\" isn't available in your channels.");
+            }
+            byChannel.computeIfAbsent(channel, k -> new ArrayList<>()).add(item);
+        }
+        return byChannel;
+    }
+
+    private static CreateOrderRequest channelRequest(CreateOrderRequest request, List<OrderItemRequest> items,
+                                                     int channelCount) {
+        return new CreateOrderRequest(
+                request.customerId(), items, request.notes(),
+                // A distributor is channel-specific — only meaningful when nothing was split.
+                channelCount == 1 ? request.distributorId() : null,
+                request.deliveryAddressLabel(), request.deliveryAddressLine(),
+                request.customerSignature(), request.salespersonSignature(), request.poNumber());
     }
 
     public void deleteDraftOrder(UUID orderId, UUID userId) {
@@ -220,7 +326,11 @@ public class OrderService {
         }
         order.setStatus(Order.OrderStatus.SUBMITTED);
         auditLog.log(userId, "SUBMIT", "ORDER", orderId, Order.OrderStatus.DRAFT, Order.OrderStatus.SUBMITTED);
-        return orderRepo.save(order);
+        Order saved = orderRepo.save(order);
+        // Auto-approved orders returned above get the invoice notification instead, so the
+        // customer receives one message per order either way.
+        events.publishEvent(SalesDocumentEvent.orderSubmitted(saved.getId()));
+        return saved;
     }
 
     public Order approveOrder(UUID orderId, UUID managerId) {
@@ -254,11 +364,11 @@ public class OrderService {
     }
 
     @Transactional(readOnly = true)
-    public Page<OrderResponseDto> getOrders(UUID userId, UUID linkedCustomerId, String roleName,
+    public Page<OrderResponseDto> getOrders(UUID userId, UUID linkedCustomerId, UUID linkedDistributorId, String roleName,
                                   String status, String source,
                                   String orderNo, String invoiceNo,
                                   LocalDate dateFrom, LocalDate dateTo, Pageable pageable) {
-        Specification<Order> spec = buildOrderSpec(userId, linkedCustomerId, roleName,
+        Specification<Order> spec = buildOrderSpec(userId, linkedCustomerId, linkedDistributorId, roleName,
                 status, source, orderNo, invoiceNo, dateFrom, dateTo);
 
         Page<Order> page = orderRepo.findAll(spec, pageable);
@@ -271,16 +381,16 @@ public class OrderService {
      *  full-detail (one row per product line) export, which needs the actual
      *  Order/OrderItem/Product entities rather than the flattened response DTO. */
     @Transactional(readOnly = true)
-    public List<Order> getOrdersForExport(UUID userId, UUID linkedCustomerId, String roleName,
+    public List<Order> getOrdersForExport(UUID userId, UUID linkedCustomerId, UUID linkedDistributorId, String roleName,
                                   String status, String source,
                                   String orderNo, String invoiceNo,
                                   LocalDate dateFrom, LocalDate dateTo) {
-        Specification<Order> spec = buildOrderSpec(userId, linkedCustomerId, roleName,
+        Specification<Order> spec = buildOrderSpec(userId, linkedCustomerId, linkedDistributorId, roleName,
                 status, source, orderNo, invoiceNo, dateFrom, dateTo);
         return orderRepo.findAll(spec);
     }
 
-    private Specification<Order> buildOrderSpec(UUID userId, UUID linkedCustomerId, String roleName,
+    private Specification<Order> buildOrderSpec(UUID userId, UUID linkedCustomerId, UUID linkedDistributorId, String roleName,
                                   String status, String source,
                                   String orderNo, String invoiceNo,
                                   LocalDate dateFrom, LocalDate dateTo) {
@@ -303,10 +413,13 @@ public class OrderService {
         return (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
 
-            // CUSTOMER role always sees only their own orders; SALES_REP only their own —
-            // source filter only applies for SUPER_ADMIN/SALES_MANAGER (matches prior behavior)
+            // CUSTOMER role always sees only their own orders; DISTRIBUTOR only orders placed
+            // under it; SALES_REP only their own — source filter only applies for
+            // SUPER_ADMIN/SALES_MANAGER (matches prior behavior)
             if (Role.CUSTOMER.equals(roleName) && linkedCustomerId != null) {
                 predicates.add(cb.equal(root.get("customer").get("id"), linkedCustomerId));
+            } else if (Role.DISTRIBUTOR.equals(roleName) && linkedDistributorId != null) {
+                predicates.add(cb.equal(root.get("distributor").get("id"), linkedDistributorId));
             } else if (Role.SALES_REP.equals(roleName)) {
                 predicates.add(cb.equal(root.get("salesRep").get("id"), userId));
             } else if (sourceFilter != null) {

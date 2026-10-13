@@ -4,6 +4,9 @@ import com.sfa.dto.order.CreateOrderRequest;
 import com.sfa.dto.order.OrderResponseDto;
 import com.sfa.exception.BusinessException;
 import com.sfa.license.LicensedPackage;
+import com.sfa.notification.CustomerNotificationService;
+import com.sfa.notification.CustomerNotificationService.ShareRequest;
+import com.sfa.notification.CustomerNotificationService.ShareResult;
 import com.sfa.license.RequiresLicense;
 import com.sfa.security.UserDetailsImpl;
 import com.sfa.service.DetailedExportGenerator;
@@ -29,6 +32,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -42,6 +46,7 @@ public class OrderController {
     private final OrderService orderService;
     private final OrderExportGenerator orderExportGenerator;
     private final DetailedExportGenerator detailedExportGenerator;
+    private final CustomerNotificationService notificationService;
 
     @GetMapping
     @Operation(summary = "List orders (customer sees own; sales rep sees own; manager/admin sees all)")
@@ -55,8 +60,8 @@ public class OrderController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateTo,
             @PageableDefault(size = 20, sort = "orderDate", direction = Sort.Direction.DESC) Pageable pageable) {
         return ResponseEntity.ok(
-                orderService.getOrders(user.getId(), user.getLinkedCustomerId(), user.getRoleName(),
-                        status, source, orderNo, invoiceNo, dateFrom, dateTo, pageable));
+                orderService.getOrders(user.getId(), user.getLinkedCustomerId(), user.getLinkedDistributorId(),
+                        user.getRoleName(), status, source, orderNo, invoiceNo, dateFrom, dateTo, pageable));
     }
 
     @GetMapping("/export")
@@ -71,8 +76,8 @@ public class OrderController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateFrom,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateTo) throws IOException {
 
-        var rows = orderService.getOrders(user.getId(), user.getLinkedCustomerId(), user.getRoleName(),
-                status, source, orderNo, invoiceNo, dateFrom, dateTo, Pageable.unpaged()).getContent();
+        var rows = orderService.getOrders(user.getId(), user.getLinkedCustomerId(), user.getLinkedDistributorId(),
+                user.getRoleName(), status, source, orderNo, invoiceNo, dateFrom, dateTo, Pageable.unpaged()).getContent();
 
         byte[] bytes;
         MediaType contentType;
@@ -129,8 +134,8 @@ public class OrderController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateFrom,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateTo) throws IOException {
 
-        var orders = orderService.getOrdersForExport(user.getId(), user.getLinkedCustomerId(), user.getRoleName(),
-                status, source, orderNo, invoiceNo, dateFrom, dateTo);
+        var orders = orderService.getOrdersForExport(user.getId(), user.getLinkedCustomerId(), user.getLinkedDistributorId(),
+                user.getRoleName(), status, source, orderNo, invoiceNo, dateFrom, dateTo);
         byte[] bytes = detailedExportGenerator.generateOrdersDetailExcel(orders);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"orders-details.xlsx\"")
@@ -148,6 +153,27 @@ public class OrderController {
                 .body(OrderResponseDto.from(orderService.createOrder(request, user.getId())));
     }
 
+    @PostMapping("/checkout")
+    @PreAuthorize("hasRole('CUSTOMER')")
+    @Operation(summary = "Customer app: create and submit one order per channel in the cart")
+    public ResponseEntity<List<OrderResponseDto>> checkout(
+            @Valid @RequestBody CreateOrderRequest request,
+            @AuthenticationPrincipal UserDetailsImpl user) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(orderService.checkoutAsCustomer(request, user.getId()).stream()
+                        .map(OrderResponseDto::from).toList());
+    }
+
+    @PostMapping("/quote")
+    @PreAuthorize("hasRole('CUSTOMER')")
+    @Operation(summary = "Customer app: price the cart (one quote per channel) without placing it")
+    public List<OrderResponseDto> quote(
+            @Valid @RequestBody CreateOrderRequest request,
+            @AuthenticationPrincipal UserDetailsImpl user) {
+        return orderService.quoteAsCustomer(request, user.getId()).stream()
+                .map(OrderResponseDto::from).toList();
+    }
+
     @DeleteMapping("/{id}")
     @Operation(summary = "Delete a DRAFT order (sales rep / customer can only delete their own)")
     public ResponseEntity<Void> delete(
@@ -163,6 +189,15 @@ public class OrderController {
             @PathVariable UUID id,
             @AuthenticationPrincipal UserDetailsImpl user) {
         return ResponseEntity.ok(OrderResponseDto.from(orderService.submitOrder(id, user.getId())));
+    }
+
+    @PostMapping("/{id}/share")
+    // Portal logins (customer / distributor) could otherwise point the send at any address.
+    @PreAuthorize("isAuthenticated() and !hasAnyRole('CUSTOMER','DISTRIBUTOR')")
+    @Operation(summary = "Send the order details to the customer by email and/or WhatsApp")
+    public ResponseEntity<List<ShareResult>> share(@PathVariable UUID id,
+                                                   @RequestBody(required = false) ShareRequest request) {
+        return ResponseEntity.ok(notificationService.shareOrder(id, request));
     }
 
     @PostMapping("/{id}/approve")
