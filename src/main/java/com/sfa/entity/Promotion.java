@@ -57,6 +57,14 @@ public class Promotion {
     @Builder.Default
     private Integer minOrderQty = 1;
 
+    /** Free-product reward repeats for every full this many bought; null = rewarded once. */
+    @Column(name = "repeat_every_qty")
+    private Integer repeatEveryQty;
+
+    /** Optional ceiling on free units per order; null = no limit. */
+    @Column(name = "max_free_total")
+    private Integer maxFreeTotal;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "customer_id")
     private Customer customer;

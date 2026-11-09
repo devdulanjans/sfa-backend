@@ -261,6 +261,8 @@ public class BatchPriceController {
         BigDecimal    beforeDV     = promo.getDiscountValue();
         Integer       beforeMFC    = promo.getMaxFreeCount();
         Integer       beforeMOQ    = promo.getMinOrderQty();
+        Integer       beforeRepeat = promo.getRepeatEveryQty();
+        Integer       beforeCap    = promo.getMaxFreeTotal();
         LocalDate     beforeSD     = promo.getStartDate();
         LocalDate     beforeED     = promo.getEndDate();
         Boolean       beforeActive = promo.getIsActive();
@@ -281,6 +283,8 @@ public class BatchPriceController {
         addIfChanged(diff, "Discount Value",  s(beforeDV),                 s(saved.getDiscountValue()));
         addIfChanged(diff, "Max Free Units",  s(beforeMFC),                s(saved.getMaxFreeCount()));
         addIfChanged(diff, "Min Order Qty",   s(beforeMOQ),                s(saved.getMinOrderQty()));
+        addIfChanged(diff, "Repeat Every",    s(beforeRepeat),             s(saved.getRepeatEveryQty()));
+        addIfChanged(diff, "Max Free Total",  s(beforeCap),                s(saved.getMaxFreeTotal()));
         addIfChanged(diff, "Start Date",     s(beforeSD),                 s(saved.getStartDate()));
         addIfChanged(diff, "End Date",       s(beforeED),                 s(saved.getEndDate()));
         addIfChanged(diff, "Active",         s(beforeActive),             s(saved.getIsActive()));
@@ -403,16 +407,29 @@ public class BatchPriceController {
             promo.setDiscountValue(BigDecimal.ZERO);
             Object maxFree = body.get("maxFreeCount");
             promo.setMaxFreeCount(maxFree != null ? Integer.parseInt(maxFree.toString()) : 1);
-            Object minOrdQty = body.get("minOrderQty");
-            promo.setMinOrderQty(minOrdQty != null ? Integer.parseInt(minOrdQty.toString()) : 1);
+            promo.setRepeatEveryQty(optionalPositiveInt(body, "repeatEveryQty"));
+            promo.setMaxFreeTotal(optionalPositiveInt(body, "maxFreeTotal"));
         } else {
             promo.setFreeProduct(null);
             promo.setDiscountValue(new BigDecimal(body.get("discountValue").toString()));
+            promo.setRepeatEveryQty(null);
+            promo.setMaxFreeTotal(null);
         }
+        Integer minOrderQty = optionalPositiveInt(body, "minOrderQty");
+        promo.setMinOrderQty(minOrderQty != null ? minOrderQty : 1);
 
         promo.setStartDate(LocalDate.parse((String) body.get("startDate")));
         promo.setEndDate(LocalDate.parse((String) body.get("endDate")));
         promo.setIsActive(Boolean.TRUE.equals(body.get("isActive")));
+    }
+
+    /** Null when absent or blank; rejects anything below 1. */
+    private Integer optionalPositiveInt(Map<String, Object> body, String key) {
+        Object raw = body.get(key);
+        if (raw == null || raw.toString().isBlank()) return null;
+        int value = new BigDecimal(raw.toString()).intValueExact();
+        if (value < 1) throw new BusinessException(key + " must be at least 1");
+        return value;
     }
 
     private void addIfChanged(Map<String, Object> diff, String label, String before, String after) {

@@ -65,6 +65,13 @@ public class SystemSettingService {
                 .orElse(true);
     }
 
+    @Transactional(readOnly = true)
+    public boolean isPromotionManualSelectionEnabled() {
+        return repo.findById("promotion_manual_selection")
+                .map(s -> Boolean.parseBoolean(s.getValue()))
+                .orElse(true);
+    }
+
     public SystemSetting update(String key, String value, UUID updatedBy) {
         SystemSetting setting = repo.findById(key)
                 .orElseThrow(() -> new ResourceNotFoundException("Setting not found with key: " + key));

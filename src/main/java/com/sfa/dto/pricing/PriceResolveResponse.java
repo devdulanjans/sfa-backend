@@ -14,5 +14,6 @@ public record PriceResolveResponse(
 ) {
     /** Populated only when a FREE_PRODUCT promotion applies to the resolved product. */
     public record FreeProduct(UUID id, String name, String productCode,
-                              int maxFreeCount, int minOrderQty, List<UUID> applicableProductIds) {}
+                              int maxFreeCount, int minOrderQty, List<UUID> applicableProductIds,
+                              Integer repeatEveryQty, Integer maxFreeTotal) {}
 }

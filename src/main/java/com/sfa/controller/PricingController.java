@@ -3,19 +3,27 @@ package com.sfa.controller;
 import com.sfa.dto.pricing.BatchPriceTierDto;
 import com.sfa.dto.pricing.PriceResolveRequest;
 import com.sfa.dto.pricing.PriceResolveResponse;
+import com.sfa.dto.pricing.PromotionOptionDto;
 import com.sfa.entity.BatchPrice;
+import com.sfa.entity.Product;
+import com.sfa.entity.Promotion;
 import com.sfa.repository.BatchPriceRepository;
+import com.sfa.repository.PromotionRepository;
 import com.sfa.service.PricingEngine;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -26,23 +34,29 @@ public class PricingController {
 
     private final PricingEngine pricingEngine;
     private final BatchPriceRepository batchPriceRepo;
+    private final PromotionRepository promotionRepo;
 
     /** Used by web admin (POST with JSON body). */
     @PostMapping("/resolve")
     public PriceResolveResponse resolve(@Valid @RequestBody PriceResolveRequest req) {
-        return doResolve(req.productId(), req.customerId());
+        return doResolve(req.productId(), req.customerId(), req.promotionId(), false);
     }
 
     /** Used by mobile (GET with query params). */
     @GetMapping("/resolve")
     public PriceResolveResponse resolveGet(
             @RequestParam UUID productId,
-            @RequestParam UUID customerId) {
-        return doResolve(productId, customerId);
+            @RequestParam UUID customerId,
+            @RequestParam(required = false) UUID promotionId,
+            @RequestParam(defaultValue = "false") boolean ignorePromotions) {
+        return doResolve(productId, customerId, promotionId, ignorePromotions);
     }
 
-    private PriceResolveResponse doResolve(UUID productId, UUID customerId) {
-        PricingEngine.PriceResult r = pricingEngine.resolve(productId, customerId);
+    private PriceResolveResponse doResolve(UUID productId, UUID customerId, UUID promotionId,
+                                           boolean ignorePromotions) {
+        PricingEngine.PriceResult r = ignorePromotions
+                ? pricingEngine.resolveRegular(productId, customerId)
+                : pricingEngine.resolve(productId, customerId, BigDecimal.ONE, null, promotionId);
         PriceResolveResponse.FreeProduct fp = r.freeProduct() == null ? null
                 : new PriceResolveResponse.FreeProduct(
                         r.freeProduct().id(),
@@ -50,7 +64,9 @@ public class PricingController {
                         r.freeProduct().productCode(),
                         r.freeProduct().maxFreeCount(),
                         r.freeProduct().minOrderQty(),
-                        r.freeProduct().applicableProductIds());
+                        r.freeProduct().applicableProductIds(),
+                        r.freeProduct().repeatEveryQty(),
+                        r.freeProduct().maxFreeTotal());
         return new PriceResolveResponse(r.unitPrice(), r.source(), r.promotionName(), r.maxDiscountAmount(), r.taxPct(), fp);
     }
 
@@ -126,5 +142,58 @@ public class PricingController {
                     );
                 })
                 .toList();
+    }
+
+    /**
+     * All promotions currently active for this product+customer — used by the client to detect
+     * when more than one applies (see {@link SystemSettingService#isPromotionManualSelectionEnabled}):
+     * if so and manual selection is on, the sales rep should be shown this list and asked to pick
+     * one, then pass its id back as {@code promotionId} to {@code /pricing/resolve} rather than
+     * letting the server auto-pick. Empty or single-element list means no choice is needed.
+     */
+    @GetMapping("/promotions")
+    public List<PromotionOptionDto> promotionOptions(
+            @RequestParam UUID productId,
+            @RequestParam UUID customerId) {
+        return promotionRepo.findActivePromotions(productId, customerId, LocalDate.now())
+                .stream()
+                .map(this::toOption)
+                .toList();
+    }
+
+    /**
+     * Every promotion active for this customer, keyed by product id — used by mobile to label a
+     * whole product list in one call. Includes products reached through a promotion's product group.
+     */
+    @GetMapping("/product-promotions")
+    @Transactional(readOnly = true)
+    public Map<UUID, List<PromotionOptionDto>> productPromotions(@RequestParam UUID customerId) {
+        Map<UUID, List<PromotionOptionDto>> byProduct = new LinkedHashMap<>();
+        for (Promotion p : promotionRepo.findActiveForCustomer(customerId, LocalDate.now())) {
+            Set<Product> products = new LinkedHashSet<>(p.getProducts());
+            if (p.getProductGroup() != null) {
+                products.addAll(p.getProductGroup().getMembers());
+            }
+            PromotionOptionDto option = toOption(p);
+            for (Product product : products) {
+                byProduct.computeIfAbsent(product.getId(), id -> new ArrayList<>()).add(option);
+            }
+        }
+        return byProduct;
+    }
+
+    private PromotionOptionDto toOption(Promotion p) {
+        return new PromotionOptionDto(
+                p.getId(),
+                p.getName(),
+                p.getType().name(),
+                p.getDiscountValue(),
+                p.getFreeProduct() != null ? p.getFreeProduct().getId() : null,
+                p.getFreeProduct() != null ? p.getFreeProduct().getName() : null,
+                p.getMaxFreeCount(),
+                p.getMinOrderQty(),
+                p.getRepeatEveryQty(),
+                p.getMaxFreeTotal(),
+                pricingEngine.promotionProducts(p).stream().map(Product::getId).toList());
     }
 }
