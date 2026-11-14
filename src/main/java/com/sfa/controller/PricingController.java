@@ -5,20 +5,25 @@ import com.sfa.dto.pricing.PriceResolveRequest;
 import com.sfa.dto.pricing.PriceResolveResponse;
 import com.sfa.dto.pricing.PromotionOptionDto;
 import com.sfa.entity.BatchPrice;
+import com.sfa.entity.Product;
 import com.sfa.entity.Promotion;
 import com.sfa.repository.BatchPriceRepository;
 import com.sfa.repository.PromotionRepository;
 import com.sfa.service.PricingEngine;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -34,7 +39,8 @@ public class PricingController {
     /** Used by web admin (POST with JSON body). */
     @PostMapping("/resolve")
     public PriceResolveResponse resolve(@Valid @RequestBody PriceResolveRequest req) {
-        return doResolve(req.productId(), req.customerId(), req.promotionId(), req.qty(), req.batchPriceId());
+        return doResolve(req.productId(), req.customerId(), req.promotionId(), req.qty(),
+                req.batchPriceId(), false);
     }
 
     /** Used by mobile (GET with query params). */
@@ -44,14 +50,17 @@ public class PricingController {
             @RequestParam UUID customerId,
             @RequestParam(required = false) UUID promotionId,
             @RequestParam(required = false) BigDecimal qty,
-            @RequestParam(required = false) UUID batchPriceId) {
-        return doResolve(productId, customerId, promotionId, qty, batchPriceId);
+            @RequestParam(required = false) UUID batchPriceId,
+            @RequestParam(defaultValue = "false") boolean ignorePromotions) {
+        return doResolve(productId, customerId, promotionId, qty, batchPriceId, ignorePromotions);
     }
 
     private PriceResolveResponse doResolve(UUID productId, UUID customerId, UUID promotionId,
-                                            BigDecimal qty, UUID batchPriceId) {
-        PricingEngine.PriceResult r = pricingEngine.resolve(productId, customerId,
-                qty != null ? qty : BigDecimal.ONE, batchPriceId, promotionId);
+                                           BigDecimal qty, UUID batchPriceId, boolean ignorePromotions) {
+        PricingEngine.PriceResult r = ignorePromotions
+                ? pricingEngine.resolveRegular(productId, customerId)
+                : pricingEngine.resolve(productId, customerId, qty != null ? qty : BigDecimal.ONE,
+                        batchPriceId, promotionId);
         PriceResolveResponse.FreeProduct fp = r.freeProduct() == null ? null
                 : new PriceResolveResponse.FreeProduct(
                         r.freeProduct().id(),
@@ -60,8 +69,11 @@ public class PricingController {
                         r.freeProduct().maxFreeCount(),
                         r.freeProduct().minOrderQty(),
                         r.freeProduct().applicableProductIds(),
+                        r.freeProduct().repeatEveryQty(),
+                        r.freeProduct().maxFreeTotal(),
                         r.freeProduct().promotionId());
-        return new PriceResolveResponse(r.unitPrice(), r.source(), r.promotionName(), r.maxDiscountAmount(), r.taxPct(), fp, r.basePrice());
+        return new PriceResolveResponse(r.unitPrice(), r.source(), r.promotionName(), r.maxDiscountAmount(),
+                r.taxPct(), fp, r.basePrice());
     }
 
     /**
@@ -151,16 +163,43 @@ public class PricingController {
             @RequestParam UUID customerId) {
         return promotionRepo.findActivePromotions(productId, customerId, LocalDate.now())
                 .stream()
-                .map(p -> new PromotionOptionDto(
-                        p.getId(),
-                        p.getName(),
-                        p.getType().name(),
-                        p.getDiscountValue(),
-                        p.getFreeProduct() != null ? p.getFreeProduct().getId() : null,
-                        p.getFreeProduct() != null ? p.getFreeProduct().getName() : null,
-                        p.getMaxFreeCount(),
-                        p.getMinOrderQty()
-                ))
+                .map(this::toOption)
                 .toList();
+    }
+
+    /**
+     * Every promotion active for this customer, keyed by product id — used by mobile to label a
+     * whole product list in one call. Includes products reached through a promotion's product group.
+     */
+    @GetMapping("/product-promotions")
+    @Transactional(readOnly = true)
+    public Map<UUID, List<PromotionOptionDto>> productPromotions(@RequestParam UUID customerId) {
+        Map<UUID, List<PromotionOptionDto>> byProduct = new LinkedHashMap<>();
+        for (Promotion p : promotionRepo.findActiveForCustomer(customerId, LocalDate.now())) {
+            Set<Product> products = new LinkedHashSet<>(p.getProducts());
+            if (p.getProductGroup() != null) {
+                products.addAll(p.getProductGroup().getMembers());
+            }
+            PromotionOptionDto option = toOption(p);
+            for (Product product : products) {
+                byProduct.computeIfAbsent(product.getId(), id -> new ArrayList<>()).add(option);
+            }
+        }
+        return byProduct;
+    }
+
+    private PromotionOptionDto toOption(Promotion p) {
+        return new PromotionOptionDto(
+                p.getId(),
+                p.getName(),
+                p.getType().name(),
+                p.getDiscountValue(),
+                p.getFreeProduct() != null ? p.getFreeProduct().getId() : null,
+                p.getFreeProduct() != null ? p.getFreeProduct().getName() : null,
+                p.getMaxFreeCount(),
+                p.getMinOrderQty(),
+                p.getRepeatEveryQty(),
+                p.getMaxFreeTotal(),
+                pricingEngine.promotionProducts(p).stream().map(Product::getId).toList());
     }
 }

@@ -1,6 +1,7 @@
 package com.sfa.dto.pricing;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.UUID;
 
 /** One selectable promotion option — returned by {@code GET /api/pricing/promotions} when
@@ -14,5 +15,8 @@ public record PromotionOptionDto(
         UUID freeProductId,
         String freeProductName,
         Integer maxFreeCount,
-        Integer minOrderQty
+        Integer minOrderQty,
+        Integer repeatEveryQty,
+        Integer maxFreeTotal,
+        List<UUID> productIds
 ) {}

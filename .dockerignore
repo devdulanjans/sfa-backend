@@ -5,3 +5,6 @@ target/
 *.iml
 .env
 .env.*
+db-backups/
+*.sql.gz
+*.dump

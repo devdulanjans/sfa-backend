@@ -30,15 +30,12 @@ public class PricingEngine {
     private final ProductRepository    productRepo;
     private final CustomerRepository   customerRepo;
 
-    /**
-     * Carries the resolved free product when a FREE_PRODUCT promotion applies.
-     * @param promotionId the FREE_PRODUCT promotion's own id — lets a client track and exclude
-     *                     it locally when a different, explicit promotion is chosen for this
-     *                     same product's paid line, mirroring how OrderService's
-     *                     excludedFreePromotionIds already excludes it server-side.
-     */
+    /** Carries the resolved free product when a FREE_PRODUCT promotion applies. */
     public record FreeProductInfo(UUID id, String name, String productCode,
                                   int maxFreeCount, int minOrderQty, List<UUID> applicableProductIds,
+                                  Integer repeatEveryQty, Integer maxFreeTotal,
+                                  // the FREE_PRODUCT promotion's own id, so a client can exclude
+                                  // it when a different promotion is chosen for the same line
                                   UUID promotionId) {}
 
     public record PriceResult(
@@ -48,8 +45,8 @@ public class PricingEngine {
             BigDecimal      maxDiscountAmount,
             BigDecimal      taxPct,
             FreeProductInfo freeProduct,
-            // Pre-promotion price, so callers can show the discount a promotion applied. Equal
-            // to unitPrice for every other source (a batch/customer tier isn't a "discount").
+            // Pre-promotion price, equal to unitPrice unless a promotion discounted it — lets
+            // clients (the customer app's catalog) show the discount a promotion applied.
             BigDecimal      basePrice) {}
 
     public record LineItemResult(
@@ -118,28 +115,42 @@ public class PricingEngine {
      *                      itself, the free-item hint reflects only that one.
      */
     public PriceResult resolve(UUID productId, UUID customerId, BigDecimal qty, UUID batchPriceId, UUID promotionId) {
+        return resolve(productId, customerId, qty, batchPriceId, promotionId, null);
+    }
+
+    /** @param cartQty whole-cart quantities by product, for promotion unlock checks; null = this line only. */
+    public PriceResult resolve(UUID productId, UUID customerId, BigDecimal qty, UUID batchPriceId, UUID promotionId,
+                               Map<UUID, BigDecimal> cartQty) {
         LocalDate today   = LocalDate.now();
         BigDecimal q      = qty != null ? qty : BigDecimal.ONE;
         Product   product = productRepo.findById(productId).orElseThrow();
         BigDecimal taxPct = resolveTaxPct(product, customerId);
 
-        List<Promotion> activePromotions = promotionRepo.findActivePromotions(productId, customerId, today);
+        List<Promotion> activePromotions = eligiblePromotions(productId, customerId, today, promotionId,
+                cartQty != null ? cartQty : Map.of(productId, q));
 
         // A FREE_PRODUCT promotion's eligibility is independent of which price source wins for
         // the *paid* unit below — a product can have both a customer-specific batch price and
         // a "buy X get Y free" promotion active at once, and the free item must still be surfaced
         // even when the batch price (step 1) is what prices the paid unit. Resolved once here and
         // attached to whichever step below returns, rather than only being reachable from step 2.
-        FreeProductInfo freeInfo = activePromotions.stream()
+        // When the rep picked a promotion, only that one may grant a free item.
+        List<Promotion> freeCandidates = activePromotions.stream()
+                .filter(p -> p.getId().equals(promotionId))
+                .findFirst()
+                .map(List::of)
+                .orElse(activePromotions);
+        FreeProductInfo freeInfo = freeCandidates.stream()
                 .filter(p -> p.getType() == Promotion.PromotionType.FREE_PRODUCT && p.getFreeProduct() != null)
                 .findFirst()
                 .map(p -> {
                     Product fp = p.getFreeProduct();
                     int maxFree   = p.getMaxFreeCount() != null ? p.getMaxFreeCount() : 1;
                     int minOrdQty = p.getMinOrderQty()  != null ? p.getMinOrderQty()  : 1;
-                    List<UUID> applicableIds = p.getProducts().stream().map(Product::getId).toList();
+                    List<UUID> applicableIds = promotionProducts(p).stream().map(Product::getId).toList();
                     return new FreeProductInfo(fp.getId(), fp.getName(), fp.getProductCode(),
-                            maxFree, minOrdQty, applicableIds, p.getId());
+                            maxFree, minOrdQty, applicableIds, p.getRepeatEveryQty(), p.getMaxFreeTotal(),
+                            p.getId());
                 })
                 .orElse(null);
 
@@ -151,26 +162,8 @@ public class PricingEngine {
                 BatchPrice bp = explicit.get();
                 String source = (bp.getCustomer() != null || bp.getCustomerGroup() != null)
                         ? "CUSTOMER_PRICE" : "BATCH_PRICE";
-                BigDecimal tierPrice = bp.getPrice();
-
-                // An explicitly-chosen promotion still applies on top of the picked tier's
-                // price — picking a tier must never silently discard a promotion the rep
-                // separately chose for this line. Only applies when the rep actually chose
-                // one; picking a tier alone never auto-applies a promotion nobody selected.
-                if (promotionId != null) {
-                    Optional<Promotion> explicitPromo = activePromotions.stream()
-                            .filter(p -> p.getId().equals(promotionId))
-                            .filter(p -> p.getType() != Promotion.PromotionType.FREE_PRODUCT)
-                            .filter(p -> qualifiesForQty(p, tierPrice, q))
-                            .findFirst();
-                    if (explicitPromo.isPresent()) {
-                        Promotion p = explicitPromo.get();
-                        return new PriceResult(applyPromotion(tierPrice, p, q), "PROMOTION",
-                                p.getName(), product.getMaxDiscountAmount(), taxPct, null, tierPrice);
-                    }
-                }
-                return new PriceResult(tierPrice, source,
-                        null, product.getMaxDiscountAmount(), taxPct, freeInfo, tierPrice);
+                return new PriceResult(bp.getPrice(), source,
+                        null, product.getMaxDiscountAmount(), taxPct, freeInfo, bp.getPrice());
             }
             // Falls through to normal resolution below if the id no longer validates (e.g. the
             // tier expired between the client fetching it and submitting the order) — never
@@ -182,18 +175,16 @@ public class PricingEngine {
                 batchPriceRepo.findBestCustomerBatchPrice(productId, customerId, q, today);
         if (customerPrice.isPresent()) {
             BigDecimal custPrice = customerPrice.get().getPrice();
-            // Same rule as an explicit tier (step 0): a promotion the caller explicitly chose
-            // still applies on top of the customer's own price. It must never be silently
-            // dropped just because this customer also has a special price for the product.
+            // A promotion the caller explicitly chose still applies on top of the customer's own
+            // price — batch/customer price first, then the promotion.
             if (promotionId != null) {
                 Optional<Promotion> explicitPromo = activePromotions.stream()
                         .filter(p -> p.getId().equals(promotionId))
                         .filter(p -> p.getType() != Promotion.PromotionType.FREE_PRODUCT)
-                        .filter(p -> qualifiesForQty(p, custPrice, q))
                         .findFirst();
                 if (explicitPromo.isPresent()) {
                     Promotion p = explicitPromo.get();
-                    return new PriceResult(applyPromotion(custPrice, p, q), "PROMOTION",
+                    return new PriceResult(applyPromotion(custPrice, p), "PROMOTION",
                             p.getName(), product.getMaxDiscountAmount(), taxPct, null, custPrice);
                 }
             }
@@ -201,58 +192,48 @@ public class PricingEngine {
                     null, product.getMaxDiscountAmount(), taxPct, freeInfo, custPrice);
         }
 
-        // 2. Active promotion. An explicit choice (if given and still active) is honored
-        // exactly: it's used only when it also qualifies at this qty (see qualifiesForQty) —
-        // never silently swapped for some other promotion just because it doesn't qualify
-        // *yet* (e.g. a FIXED_AMOUNT promo before enough qty is in the cart). Auto-selection
-        // below only ever runs when the rep made no explicit choice at all, or the chosen id
-        // is no longer an active promotion at all (e.g. expired between the client fetching
-        // options and submitting) — never as a substitute for an unqualified explicit pick.
-        BigDecimal promoBase = batchPriceRepo.findBestGeneralBatchPrice(productId, q, today)
-                .map(BatchPrice::getPrice)
-                .orElseGet(product::getDefaultPrice);
-
+        // 2. Active promotion. An explicit choice (if given and still active) is used verbatim;
+        // otherwise a discount-type promotion (PERCENTAGE/FIXED_AMOUNT) always wins over a
+        // FREE_PRODUCT one for pricing the paid unit — a FREE_PRODUCT promo's own effect is the
+        // separate free line above (freeInfo), so it must never silently suppress an active
+        // discount just because it happened to sort first (customer-specific still before
+        // general, per findActivePromotions' own ORDER BY).
         Promotion chosenPromo = null;
         FreeProductInfo lineFreeInfo = freeInfo;
-        boolean skipAutoSelect = false;
         if (promotionId != null) {
-            Optional<Promotion> matching = activePromotions.stream()
+            Optional<Promotion> explicit = activePromotions.stream()
                     .filter(p -> p.getId().equals(promotionId))
                     .findFirst();
-            if (matching.isPresent()) {
-                skipAutoSelect = true; // the rep chose a specific, still-active promotion
-                if (qualifiesForQty(matching.get(), promoBase, q)) {
-                    chosenPromo = matching.get();
-                    // An explicit pick is exclusive — choosing the discount promotion means the
-                    // other (free-item) promotion's trigger isn't surfaced for this line either.
-                    lineFreeInfo = chosenPromo.getType() == Promotion.PromotionType.FREE_PRODUCT ? freeInfo : null;
-                }
-                // else: doesn't qualify yet at this qty — apply no promotion at all below,
-                // rather than substituting one the rep didn't choose.
+            if (explicit.isPresent()) {
+                chosenPromo = explicit.get();
+                // An explicit pick is exclusive — choosing the discount promotion means the other
+                // (free-item) promotion's trigger isn't surfaced for this line either.
+                lineFreeInfo = chosenPromo.getType() == Promotion.PromotionType.FREE_PRODUCT ? freeInfo : null;
             }
-            // else: the chosen id is no longer active at all — falls through to auto-select.
+            // Falls through to auto-selection below if the id no longer validates (e.g. it
+            // expired between the client fetching options and submitting the order).
         }
-        if (chosenPromo == null && !skipAutoSelect) {
+        if (chosenPromo == null) {
             chosenPromo = activePromotions.stream()
                     .filter(p -> p.getType() != Promotion.PromotionType.FREE_PRODUCT)
-                    .filter(p -> qualifiesForQty(p, promoBase, q))
                     .findFirst()
-                    .or(() -> activePromotions.stream()
-                            .filter(p -> qualifiesForQty(p, promoBase, q))
-                            .findFirst())
+                    .or(() -> activePromotions.stream().findFirst())
                     .orElse(null);
         }
         if (chosenPromo != null) {
             Promotion p = chosenPromo;
+            BigDecimal base = batchPriceRepo.findBestGeneralBatchPrice(productId, q, today)
+                    .map(BatchPrice::getPrice)
+                    .orElseGet(product::getDefaultPrice);
 
             if (p.getType() == Promotion.PromotionType.FREE_PRODUCT) {
-                return new PriceResult(promoBase, "PROMOTION",
-                        p.getName(), product.getMaxDiscountAmount(), taxPct, lineFreeInfo, promoBase);
+                return new PriceResult(base, "PROMOTION",
+                        p.getName(), product.getMaxDiscountAmount(), taxPct, lineFreeInfo, base);
             }
 
-            BigDecimal promoPrice = applyPromotion(promoBase, p, q);
+            BigDecimal promoPrice = applyPromotion(base, p);
             return new PriceResult(promoPrice, "PROMOTION",
-                    p.getName(), product.getMaxDiscountAmount(), taxPct, lineFreeInfo, promoBase);
+                    p.getName(), product.getMaxDiscountAmount(), taxPct, lineFreeInfo, base);
         }
 
         // 3. General batch price (best tier for this qty)
@@ -268,6 +249,32 @@ public class PricingEngine {
                 null, product.getMaxDiscountAmount(), taxPct, freeInfo, product.getDefaultPrice());
     }
 
+    /**
+     * The product's price ignoring every promotion: customer price, then general batch price,
+     * then default. Used to show a free item at its real value — a discount promotion on the
+     * same product must not reduce the value of an item given away by a different promotion.
+     */
+    public PriceResult resolveRegular(UUID productId, UUID customerId) {
+        LocalDate today = LocalDate.now();
+        Product product = productRepo.findById(productId).orElseThrow();
+        BigDecimal taxPct = resolveTaxPct(product, customerId);
+
+        Optional<BatchPrice> customerPrice =
+                batchPriceRepo.findBestCustomerBatchPrice(productId, customerId, BigDecimal.ONE, today);
+        if (customerPrice.isPresent()) {
+            return new PriceResult(customerPrice.get().getPrice(), "CUSTOMER_PRICE",
+                    null, product.getMaxDiscountAmount(), taxPct, null, customerPrice.get().getPrice());
+        }
+        Optional<BatchPrice> generalPrice =
+                batchPriceRepo.findBestGeneralBatchPrice(productId, BigDecimal.ONE, today);
+        if (generalPrice.isPresent()) {
+            return new PriceResult(generalPrice.get().getPrice(), "BATCH_PRICE",
+                    null, product.getMaxDiscountAmount(), taxPct, null, generalPrice.get().getPrice());
+        }
+        return new PriceResult(product.getDefaultPrice(), "DEFAULT_PRICE",
+                null, product.getMaxDiscountAmount(), taxPct, null, product.getDefaultPrice());
+    }
+
     public LineItemResult calculateLine(UUID productId, UUID customerId,
                                         BigDecimal qty, BigDecimal requestedDiscountPct) {
         return calculateLine(productId, customerId, qty, requestedDiscountPct, null, null);
@@ -280,7 +287,18 @@ public class PricingEngine {
 
     public LineItemResult calculateLine(UUID productId, UUID customerId, BigDecimal qty,
                                         BigDecimal requestedDiscountPct, UUID batchPriceId, UUID promotionId) {
-        PriceResult base    = resolve(productId, customerId, qty, batchPriceId, promotionId);
+        return calculateLine(productId, customerId, qty, requestedDiscountPct, batchPriceId, promotionId, null);
+    }
+
+    /** @param cartQty whole-cart quantities by product, for promotion unlock checks; null = this line only. */
+    public LineItemResult calculateLine(UUID productId, UUID customerId, BigDecimal qty,
+                                        BigDecimal requestedDiscountPct, UUID batchPriceId, UUID promotionId,
+                                        Map<UUID, BigDecimal> cartQty) {
+        Map<UUID, BigDecimal> cart = cartQty != null ? cartQty : Map.of(productId, qty);
+        PriceResult base    = resolve(productId, customerId, qty, batchPriceId, promotionId, cart);
+        if (batchPriceId != null) {
+            base = applyPromotionToSelectedTier(base, productId, customerId, promotionId, cart);
+        }
         Product     product = productRepo.findById(productId).orElseThrow();
 
         // maxDiscountAmount is a fixed per-unit Rs cap, not a percentage — convert the requested
@@ -312,14 +330,15 @@ public class PricingEngine {
     /**
      * Computes FREE_PRODUCT lines earned by this cart. For each active FREE_PRODUCT promotion
      * whose trigger products appear in {@code purchasedQtyByProduct} with a combined quantity
-     * meeting {@code minOrderQty}, returns a line for {@code maxFreeCount} units of the free
+     * meeting {@code minOrderQty}, returns a line for the free quantity earned (see
+     * {@link #freeQuantity}) of the free
      * product. When {@code showAsDiscount} is true the line is priced at the free product's
      * normal price with a 100% discount (so it prints as a real line + a discount, reducing the
      * grand total by the same amount); otherwise it is priced at zero (today's behavior).
      */
     public List<FreeLineResult> resolveFreeItems(Map<UUID, BigDecimal> purchasedQtyByProduct,
                                                   UUID customerId, boolean showAsDiscount) {
-        return resolveFreeItems(purchasedQtyByProduct, customerId, showAsDiscount, Set.of());
+        return resolveFreeItems(purchasedQtyByProduct, customerId, showAsDiscount, Set.of(), Map.of());
     }
 
     /**
@@ -331,10 +350,14 @@ public class PricingEngine {
      *                             them here is what makes that per-line choice actually exclusive —
      *                             otherwise this cart-wide step would re-grant the free item
      *                             regardless, since it only looks at purchased quantities.
+     * @param selectedBatchPriceByProduct batch tier the rep picked for each purchased product. A
+     *                             free item that is also a purchased product is valued at that
+     *                             tier's price; otherwise at its regular price.
      */
     public List<FreeLineResult> resolveFreeItems(Map<UUID, BigDecimal> purchasedQtyByProduct,
                                                   UUID customerId, boolean showAsDiscount,
-                                                  Set<UUID> excludedPromotionIds) {
+                                                  Set<UUID> excludedPromotionIds,
+                                                  Map<UUID, UUID> selectedBatchPriceByProduct) {
         LocalDate today = LocalDate.now();
         Map<UUID, Promotion> triggered = new java.util.LinkedHashMap<>();
         for (UUID productId : purchasedQtyByProduct.keySet()) {
@@ -346,24 +369,24 @@ public class PricingEngine {
 
         List<FreeLineResult> results = new java.util.ArrayList<>();
         for (Promotion p : triggered.values()) {
-            BigDecimal purchased = p.getProducts().stream()
-                    .map(prod -> purchasedQtyByProduct.getOrDefault(prod.getId(), BigDecimal.ZERO))
-                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal purchased = purchasedQty(p, purchasedQtyByProduct);
             int minQty = p.getMinOrderQty() != null ? p.getMinOrderQty() : 1;
             if (purchased.compareTo(BigDecimal.valueOf(minQty)) < 0) continue;
 
-            BigDecimal freeQty = BigDecimal.valueOf(p.getMaxFreeCount() != null ? p.getMaxFreeCount() : 1);
+            BigDecimal freeQty = freeQuantity(p, purchased);
+            if (freeQty.signum() <= 0) continue;
             Product freeProduct = p.getFreeProduct();
 
             BigDecimal unitPrice;
             BigDecimal taxPct;
             BigDecimal discountPct;
             if (showAsDiscount) {
-                // Batch pricing only — never the promotion engine. A free item's "worth" isn't
-                // itself being discounted by a promotion, and running it through resolve() could
-                // even pick up some unrelated promotion active on that same product.
-                unitPrice   = resolveFreeItemPrice(freeProduct, customerId, freeQty, today);
-                taxPct      = resolveTaxPct(freeProduct, customerId);
+                PriceResult freePrice = resolveRegular(freeProduct.getId(), customerId);
+                unitPrice   = selectedTierPrice(freeProduct.getId(), customerId,
+                        purchasedQtyByProduct.getOrDefault(freeProduct.getId(), BigDecimal.ONE),
+                        selectedBatchPriceByProduct.get(freeProduct.getId()))
+                        .orElse(freePrice.unitPrice());
+                taxPct      = freePrice.taxPct();
                 discountPct = BigDecimal.valueOf(100);
             } else {
                 unitPrice   = BigDecimal.ZERO;
@@ -412,43 +435,95 @@ public class PricingEngine {
     }
 
     /**
-     * The value a FOC/free-product line is priced at before its 100% discount nets it to
-     * zero — customer-specific batch price first, else general batch price, falling back to
-     * the plain default price only when no batch price is configured at all. Deliberately
-     * skips the promotion engine entirely (see {@link #resolveFreeItems} call site).
+     * Order lines only: when the rep picked a batch tier, that tier sets the base price and an
+     * active discount promotion then applies on top of it. Deliberately not part of
+     * {@link #resolve}, which returns and damages also call — they must keep valuing goods at
+     * the plain tier price. A FREE_PRODUCT promotion leaves the paid unit price unchanged.
      */
-    private BigDecimal resolveFreeItemPrice(Product freeProduct, UUID customerId, BigDecimal freeQty, LocalDate today) {
-        Optional<BatchPrice> customerPrice =
-                batchPriceRepo.findBestCustomerBatchPrice(freeProduct.getId(), customerId, freeQty, today);
-        if (customerPrice.isPresent()) {
-            return customerPrice.get().getPrice();
+    private PriceResult applyPromotionToSelectedTier(PriceResult tier, UUID productId,
+                                                     UUID customerId, UUID promotionId,
+                                                     Map<UUID, BigDecimal> cart) {
+        if (!"BATCH_PRICE".equals(tier.source()) && !"CUSTOMER_PRICE".equals(tier.source())) {
+            return tier;
         }
-        return batchPriceRepo.findBestGeneralBatchPrice(freeProduct.getId(), freeQty, today)
-                .map(BatchPrice::getPrice)
-                .orElseGet(freeProduct::getDefaultPrice);
+        List<Promotion> active = eligiblePromotions(productId, customerId, LocalDate.now(), promotionId, cart);
+        Promotion promo = active.stream()
+                .filter(p -> p.getId().equals(promotionId))
+                .findFirst()
+                .orElseGet(() -> active.stream()
+                        .filter(p -> p.getType() != Promotion.PromotionType.FREE_PRODUCT)
+                        .findFirst()
+                        .orElse(null));
+        if (promo == null || promo.getType() == Promotion.PromotionType.FREE_PRODUCT) {
+            return tier;
+        }
+        return new PriceResult(applyPromotion(tier.unitPrice(), promo), "PROMOTION", promo.getName(),
+                tier.maxDiscountAmount(), tier.taxPct(), tier.freeProduct(), tier.unitPrice());
+    }
+
+    /** The promotion's products, including current members of its linked product group. */
+    public java.util.Set<Product> promotionProducts(Promotion p) {
+        java.util.Set<Product> products = new java.util.LinkedHashSet<>(p.getProducts());
+        if (p.getProductGroup() != null) {
+            products.addAll(p.getProductGroup().getMembers());
+        }
+        return products;
+    }
+
+    private BigDecimal purchasedQty(Promotion p, Map<UUID, BigDecimal> cart) {
+        return promotionProducts(p).stream()
+                .map(prod -> cart.getOrDefault(prod.getId(), BigDecimal.ZERO))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
     /**
-     * A FIXED_AMOUNT promotion is a flat amount off the line's whole pre-tax total, taken
-     * once regardless of quantity — not per unit — so it only qualifies when that pre-tax
-     * total is actually greater than the discount value (otherwise a small-qty line could be
-     * discounted to zero or below, or a flat amount could apply after wrongly multiplying by
-     * qty). Every other promotion type always qualifies.
+     * Free units for a quantity that already reached the unlock point. Counted from the first
+     * unit: unlock at 100, 1 free every 25 → 100 bought gets 4, 125 gets 5.
      */
-    private boolean qualifiesForQty(Promotion promo, BigDecimal unitPrice, BigDecimal qty) {
-        if (promo.getType() != Promotion.PromotionType.FIXED_AMOUNT) return true;
-        return unitPrice.multiply(qty).compareTo(promo.getDiscountValue()) > 0;
+    private BigDecimal freeQuantity(Promotion p, BigDecimal purchased) {
+        BigDecimal perReward = BigDecimal.valueOf(p.getMaxFreeCount() != null ? p.getMaxFreeCount() : 1);
+        BigDecimal rewards = p.getRepeatEveryQty() == null
+                ? BigDecimal.ONE
+                : purchased.divideToIntegralValue(BigDecimal.valueOf(Math.max(p.getRepeatEveryQty(), 1)));
+        BigDecimal freeQty = perReward.multiply(rewards);
+        return p.getMaxFreeTotal() == null ? freeQty : freeQty.min(BigDecimal.valueOf(p.getMaxFreeTotal()));
     }
 
-    private BigDecimal applyPromotion(BigDecimal base, Promotion promo, BigDecimal qty) {
+    /**
+     * Active promotions a line may use. Discounts below their unlock quantity are removed; a
+     * free-product promotion stays because its reward is decided cart-wide in resolveFreeItems.
+     * If the rep's own pick is still locked, nothing applies — never a substitute promotion.
+     */
+    private List<Promotion> eligiblePromotions(UUID productId, UUID customerId, LocalDate today,
+                                               UUID promotionId, Map<UUID, BigDecimal> cart) {
+        List<Promotion> active = promotionRepo.findActivePromotions(productId, customerId, today);
+        boolean selectedLocked = active.stream()
+                .anyMatch(p -> p.getId().equals(promotionId) && !isUnlocked(p, cart));
+        return selectedLocked ? List.of() : active.stream().filter(p -> isUnlocked(p, cart)).toList();
+    }
+
+    private boolean isUnlocked(Promotion p, Map<UUID, BigDecimal> cart) {
+        if (p.getType() == Promotion.PromotionType.FREE_PRODUCT
+                || p.getMinOrderQty() == null || p.getMinOrderQty() <= 1) {
+            return true;
+        }
+        return purchasedQty(p, cart).compareTo(BigDecimal.valueOf(p.getMinOrderQty())) >= 0;
+    }
+
+    private Optional<BigDecimal> selectedTierPrice(UUID productId, UUID customerId,
+                                                   BigDecimal qty, UUID batchPriceId) {
+        if (batchPriceId == null) {
+            return Optional.empty();
+        }
+        return batchPriceRepo.findValidForOrder(batchPriceId, productId, customerId, qty, LocalDate.now())
+                .map(BatchPrice::getPrice);
+    }
+
+    private BigDecimal applyPromotion(BigDecimal base, Promotion promo) {
         return switch (promo.getType()) {
             case PERCENTAGE   -> base.multiply(BigDecimal.ONE.subtract(
                     promo.getDiscountValue().divide(BigDecimal.valueOf(100), 4, RoundingMode.HALF_UP)));
-            // Flat amount off the whole line, taken once — converted back to a per-unit price
-            // since the rest of the pipeline (calculateLine) multiplies unitPrice by qty again.
-            // qualifiesForQty already guarantees this is positive.
-            case FIXED_AMOUNT -> base.multiply(qty).subtract(promo.getDiscountValue())
-                    .divide(qty, 4, RoundingMode.HALF_UP);
+            case FIXED_AMOUNT -> base.subtract(promo.getDiscountValue()).max(BigDecimal.ZERO);
             case FREE_PRODUCT -> base; // main product price unchanged
         };
     }
