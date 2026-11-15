@@ -30,5 +30,11 @@ public record LoginResponse(
     TenantDto activeTenant,
     /** Set by an admin/super-admin password reset — the client must force this session
      *  straight to the change-password screen before anything else until it's cleared. */
-    boolean mustChangePassword
+    boolean mustChangePassword,
+    /** Every workspace (role in a business) this account can switch to (V119). */
+    List<com.sfa.dto.membership.MembershipDto> memberships,
+    /** The workspace this session acts as; null for platform accounts or when none is chosen yet. */
+    UUID activeMembershipId,
+    /** Invitations from businesses waiting for this person to accept or decline. */
+    int invitationCount
 ) {}

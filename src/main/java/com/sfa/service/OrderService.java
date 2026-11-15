@@ -95,11 +95,14 @@ public class OrderService {
         UUID resolvedCustomerId = request.customerId();
         Order.OrderSource orderSource = Order.OrderSource.SALES_REP;
 
-        if (Role.CUSTOMER.equals(salesRep.getRole().getName())) {
-            if (salesRep.getCustomer() == null) {
+        // The role/customer this person is acting as in THIS session (V119 memberships): the
+        // same account can be a sales rep in one business and a customer of another.
+        if (Role.CUSTOMER.equals(com.sfa.security.CurrentSession.roleOf(salesRep))) {
+            UUID sessionCustomerId = com.sfa.security.CurrentSession.linkedCustomerIdOf(salesRep);
+            if (sessionCustomerId == null) {
                 throw new BusinessException("Your account is not linked to a customer record");
             }
-            resolvedCustomerId = salesRep.getCustomer().getId();
+            resolvedCustomerId = sessionCustomerId;
             orderSource = Order.OrderSource.CUSTOMER_APP;
         }
 
@@ -116,7 +119,7 @@ public class OrderService {
             customer = TenantGuard.requireVisible(customer, "Customer", customerId);
         }
 
-        if (Role.SALES_REP.equals(salesRep.getRole().getName())) {
+        if (Role.SALES_REP.equals(com.sfa.security.CurrentSession.roleOf(salesRep))) {
             Set<UUID> assignedIds = salesRep.getAssignedCustomers().stream()
                     .map(Customer::getId)
                     .collect(Collectors.toSet());
@@ -282,7 +285,7 @@ public class OrderService {
     private void requireCustomerAccount(UUID userId) {
         User user = userRepo.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("User", userId));
-        if (!Role.CUSTOMER.equals(user.getRole().getName())) {
+        if (!Role.CUSTOMER.equals(com.sfa.security.CurrentSession.roleOf(user))) {
             throw new BusinessException("Only available to customer accounts");
         }
     }
@@ -362,6 +365,9 @@ public class OrderService {
         if (order.getStatus() == Order.OrderStatus.INVOICED) {
             throw new BusinessException("Invoiced orders cannot be cancelled");
         }
+        if (order.getStatus() == Order.OrderStatus.PARTIALLY_INVOICED) {
+            throw new BusinessException("Part of this order is already invoiced — close the remaining balance instead");
+        }
         Order.OrderStatus previous = order.getStatus();
         order.setStatus(Order.OrderStatus.CANCELLED);
         auditLog.log(userId, "CANCEL", "ORDER", orderId, previous, Order.OrderStatus.CANCELLED);
@@ -369,6 +375,43 @@ public class OrderService {
         if (previous == Order.OrderStatus.APPROVED) {
             inventoryService.restoreForOrder(saved, userId);
         }
+        return saved;
+    }
+
+    /**
+     * "Close the balance" of a partly invoiced order (V120): what's still to invoice will never
+     * be supplied — it's closed on each line, its stock goes back, and the order is complete.
+     */
+    public Order closeRemaining(UUID orderId, String reason, UUID userId) {
+        Order order = getOrder(orderId);
+        em.flush();
+        em.refresh(order, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+        if (order.getStatus() != Order.OrderStatus.PARTIALLY_INVOICED
+                && order.getStatus() != Order.OrderStatus.APPROVED) {
+            throw new BusinessException("Only a partly invoiced order has a balance to close");
+        }
+        if (!order.hasInvoicedAnything()) {
+            throw new BusinessException("Nothing on this order is invoiced yet — cancel the order instead");
+        }
+        Map<UUID, java.math.BigDecimal> closed = new java.util.LinkedHashMap<>();
+        for (var item : order.getItems()) {
+            var rest = item.getRemainingQty();
+            if (rest.signum() > 0) {
+                closed.put(item.getId(), rest);
+                item.setClosedQty(item.getClosedQty().add(rest));
+            }
+        }
+        if (closed.isEmpty()) {
+            throw new BusinessException("Nothing is left to close on this order");
+        }
+        Order.OrderStatus previous = order.getStatus();
+        order.setStatus(Order.OrderStatus.INVOICED);
+        Order saved = orderRepo.save(order);
+        inventoryService.restoreRemainderForOrder(saved, closed, userId);
+        auditLog.log(userId, "CLOSE_BALANCE", "ORDER", orderId, previous,
+                Map.of("status", Order.OrderStatus.INVOICED.name(),
+                       "reason", reason == null || reason.isBlank() ? "" : reason.trim(),
+                       "closedLines", closed.size()));
         return saved;
     }
 

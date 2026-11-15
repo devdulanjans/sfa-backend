@@ -37,5 +37,8 @@ public record CreateCustomerRequest(
         @DecimalMin("-180") @DecimalMax("180") BigDecimal longitude,
         /** Every channel the customer should be available in (V112). Null → unchanged on edit,
          *  home channel only on create. Only channels the actor may manage are applied. */
-        List<java.util.UUID> tenantIds
+        List<java.util.UUID> tenantIds,
+        /** Create only: an already-registered shop (from GET /customers/shop-matches) this new
+         *  customer is for. Null → an unambiguous automatic match, or a new shop (V118). */
+        java.util.UUID shopId
 ) {}

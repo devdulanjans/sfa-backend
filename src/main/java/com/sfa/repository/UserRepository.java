@@ -16,8 +16,14 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     Optional<User> findByUsername(String username);
     boolean existsByUsername(String username);
     boolean existsByEmail(String email);
+    boolean existsByEmailIgnoreCase(String email);
+    Optional<User> findByEmailIgnoreCase(String email);
+    /** Phones are stored normalised (0XXXXXXXXX) and unique per account (V119). */
+    Optional<User> findByPhone(String phone);
+    boolean existsByPhone(String phone);
 
-    @Query("SELECT u FROM User u WHERE u.username = :identifier OR u.email = :identifier")
+    // Sign in with username, email, or (normalised) phone number.
+    @Query("SELECT u FROM User u WHERE u.username = :identifier OR u.email = :identifier OR u.phone = :identifier")
     Optional<User> findByUsernameOrEmail(@Param("identifier") String identifier);
 
     @Query(value = "SELECT u FROM User u JOIN u.distributors d WHERE d.id = :distributorId",
@@ -26,6 +32,27 @@ public interface UserRepository extends JpaRepository<User, UUID> {
 
     @Query("SELECT u FROM User u WHERE u.role.name = :roleName AND u.status = :status ORDER BY u.fullName")
     List<User> findActiveByRoleName(@Param("roleName") String roleName, @Param("status") User.UserStatus status);
+
+    /** Active accounts holding an ACTIVE membership with this role in any of these channels (V119). */
+    @Query("""
+        SELECT DISTINCT u FROM User u, Membership m
+        WHERE m.user = u AND m.role.name = :roleName AND u.status = :status
+          AND m.status = com.sfa.entity.Membership$Status.ACTIVE
+          AND m.tenant.status = com.sfa.entity.Tenant$TenantStatus.ACTIVE
+          AND m.tenant.id IN :tenantIds
+        """)
+    List<User> findActiveByMembershipRole(@Param("roleName") String roleName, @Param("status") User.UserStatus status,
+                                          @Param("tenantIds") java.util.Collection<UUID> tenantIds);
+
+    /** Same, across every channel — the SUPER_ADMIN platform view. */
+    @Query("""
+        SELECT DISTINCT u FROM User u, Membership m
+        WHERE m.user = u AND m.role.name = :roleName AND u.status = :status
+          AND m.status = com.sfa.entity.Membership$Status.ACTIVE
+          AND m.tenant.status = com.sfa.entity.Tenant$TenantStatus.ACTIVE
+        """)
+    List<User> findActiveByMembershipRoleAnyChannel(@Param("roleName") String roleName,
+                                                    @Param("status") User.UserStatus status);
 
     Optional<User> findByCustomerId(UUID customerId);
 

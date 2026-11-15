@@ -11,17 +11,25 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
 
+/** Channel-specific (V117): each business sees and uses only its own product groups. */
 @Entity
-@Table(name = "product_groups")
-@EntityListeners(AuditingEntityListener.class)
+@Table(name = "product_groups", uniqueConstraints = {
+    @UniqueConstraint(name = "uk_product_groups_tenant_name", columnNames = {"tenant_id", "name"})
+})
+@EntityListeners({AuditingEntityListener.class, com.sfa.security.TenantAwareEntityListener.class})
+@org.hibernate.annotations.Filter(name = "tenantFilter", condition = "tenant_id in (:tenantIds)")
 @Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor
-public class ProductGroup {
+public class ProductGroup implements TenantScoped {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    @Column(nullable = false, unique = true, length = 100)
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "tenant_id", nullable = false)
+    private Tenant tenant;
+
+    @Column(nullable = false, length = 100)
     private String name;
 
     private String description;

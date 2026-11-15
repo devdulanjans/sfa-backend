@@ -62,12 +62,16 @@ public record SalesDocument(
         return new SalesDocument(Type.INVOICE, invoice.getInvoiceNumber(),
                 invoice.getIssuedDate(), invoice.getDueDate(), order.getOrderNumber(),
                 c.getName(), c.getEmail(), c.getWhatsappNumber(),
-                lines(order),
+                lines(invoice.printLines()),
                 invoice.getSubtotal(), invoice.getDiscountTotal(), invoice.getTaxTotal(), invoice.getTotal());
     }
 
     private static List<Line> lines(Order order) {
-        return order.getItems().stream()
+        return lines(order.getItems());
+    }
+
+    private static List<Line> lines(List<OrderItem> items) {
+        return items.stream()
                 .map(SalesDocument::line)
                 .toList();
     }

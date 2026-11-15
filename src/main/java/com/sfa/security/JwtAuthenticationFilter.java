@@ -41,7 +41,22 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             String token = extractToken(request);
             if (StringUtils.hasText(token) && jwtTokenProvider.validateToken(token)) {
                 String username = jwtTokenProvider.getUsernameFromToken(token);
-                UserDetails userDetails = userDetailsService.loadUserByUsername(username);
+                UUID membershipId = jwtTokenProvider.getMembershipIdFromToken(token);
+                String app = jwtTokenProvider.getAppFromToken(token);
+                UserDetailsServiceImpl sessions = (UserDetailsServiceImpl) userDetailsService;
+                UserDetails userDetails;
+                if (membershipId != null) {
+                    // The session acts as one membership (V119): its role, customer, permissions —
+                    // and only a role its app may act as (AppScope). Revoked, business disabled,
+                    // or wrong app: no authentication at all (401).
+                    userDetails = sessions.loadForMembership(username, membershipId, app).orElse(null);
+                    if (userDetails == null) {
+                        chain.doFilter(request, response);
+                        return;
+                    }
+                } else {
+                    userDetails = sessions.loadWithoutMembership(username, app);
+                }
                 var auth = new UsernamePasswordAuthenticationToken(
                         userDetails, null, userDetails.getAuthorities());
                 auth.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));

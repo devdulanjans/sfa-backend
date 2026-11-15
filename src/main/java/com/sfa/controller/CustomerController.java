@@ -58,6 +58,7 @@ public class CustomerController {
     private final PosService posService;
     private final ReturnService returnService;
     private final DamageService damageService;
+    private final com.sfa.service.ShopService shopService;
 
     @GetMapping
     public Page<CustomerDto> list(
@@ -70,6 +71,23 @@ public class CustomerController {
         Set<UUID> restricted = restrictedIds(user);
         boolean effectiveIncludeDeleted = includeDeleted && user != null && Role.SUPER_ADMIN.equals(user.getRoleName());
         return customerService.list(search, restricted, effectiveIncludeDeleted, topLevelOnly, PageRequest.of(page, size, Sort.by("name")));
+    }
+
+    /**
+     * "Is this shop already registered?" — called while adding a customer. Returns shared shop
+     * profiles matching by real phone, BR/VAT number, or GPS nearby + similar name; never any
+     * other business's terms, balances or orders. Declared before /{id} routes on purpose.
+     */
+    @GetMapping("/shop-matches")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','SALES_MANAGER')")
+    public List<com.sfa.dto.customer.ShopMatchDto> shopMatches(
+            @RequestParam(required = false) String name,
+            @RequestParam(required = false) String phone,
+            @RequestParam(required = false) String whatsapp,
+            @RequestParam(required = false) String taxNumber,
+            @RequestParam(required = false) BigDecimal latitude,
+            @RequestParam(required = false) BigDecimal longitude) {
+        return shopService.findMatches(name, phone, whatsapp, taxNumber, latitude, longitude);
     }
 
     @GetMapping("/{id}/branches")

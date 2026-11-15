@@ -147,8 +147,8 @@ public class BatchPriceController {
             bp.setProductGroup(null);
         } else {
             UUID gid = UUID.fromString(productGroupId);
-            bp.setProductGroup(productGroupRepository.findById(gid)
-                    .orElseThrow(() -> new ResourceNotFoundException("ProductGroup", gid)));
+            bp.setProductGroup(com.sfa.security.TenantGuard.requireVisible(productGroupRepository.findById(gid)
+                    .orElseThrow(() -> new ResourceNotFoundException("ProductGroup", gid)), "ProductGroup", gid));
             bp.setProduct(null);
         }
 
@@ -164,8 +164,8 @@ public class BatchPriceController {
             bp.setCustomerGroup(null);
         } else if (customerGroupId != null) {
             UUID gid = UUID.fromString(customerGroupId);
-            bp.setCustomerGroup(customerGroupRepository.findById(gid)
-                    .orElseThrow(() -> new ResourceNotFoundException("CustomerGroup", gid)));
+            bp.setCustomerGroup(com.sfa.security.TenantGuard.requireVisible(customerGroupRepository.findById(gid)
+                    .orElseThrow(() -> new ResourceNotFoundException("CustomerGroup", gid)), "CustomerGroup", gid));
             bp.setCustomer(null);
         } else {
             bp.setCustomer(null);
@@ -394,8 +394,8 @@ public class BatchPriceController {
         Object prodGroupIdObj = body.get("productGroupId");
         if (prodGroupIdObj instanceof String pgs && !pgs.isBlank()) {
             UUID pgid = UUID.fromString(pgs);
-            promo.setProductGroup(productGroupRepository.findById(pgid)
-                    .orElseThrow(() -> new ResourceNotFoundException("ProductGroup", pgid)));
+            promo.setProductGroup(com.sfa.security.TenantGuard.requireVisible(productGroupRepository.findById(pgid)
+                    .orElseThrow(() -> new ResourceNotFoundException("ProductGroup", pgid)), "ProductGroup", pgid));
         } else {
             promo.setProductGroup(null);
         }
@@ -419,8 +419,8 @@ public class BatchPriceController {
             promo.setCustomerGroup(null);
         } else if (custGroupIdStr != null) {
             UUID gid = UUID.fromString(custGroupIdStr);
-            promo.setCustomerGroup(customerGroupRepository.findById(gid)
-                    .orElseThrow(() -> new ResourceNotFoundException("CustomerGroup", gid)));
+            promo.setCustomerGroup(com.sfa.security.TenantGuard.requireVisible(customerGroupRepository.findById(gid)
+                    .orElseThrow(() -> new ResourceNotFoundException("CustomerGroup", gid)), "CustomerGroup", gid));
             promo.setCustomer(null);
         } else {
             promo.setCustomer(null);

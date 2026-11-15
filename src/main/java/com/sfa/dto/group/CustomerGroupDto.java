@@ -15,7 +15,9 @@ public record CustomerGroupDto(
         int assignedProductCount,
         List<ProductSummary> assignedProducts,
         Instant createdAt,
-        Instant updatedAt
+        Instant updatedAt,
+        /** The channel this group belongs to — shown to SUPER_ADMIN, who sees every channel's groups. */
+        String tenantCode
 ) {
     public record MemberSummary(UUID id, String name, String customerCode) {}
     public record ProductSummary(UUID id, String name, String productCode) {}
@@ -24,7 +26,7 @@ public record CustomerGroupDto(
     public static CustomerGroupDto summary(CustomerGroup g, long memberCount, long assignedProductCount) {
         return new CustomerGroupDto(g.getId(), g.getName(), g.getDescription(),
                 (int) memberCount, null, (int) assignedProductCount, null,
-                g.getCreatedAt(), g.getUpdatedAt());
+                g.getCreatedAt(), g.getUpdatedAt(), tenantCode(g));
     }
 
     /** Used for the single-group detail view — includes the full member and assigned-product lists. */
@@ -37,6 +39,10 @@ public record CustomerGroupDto(
                 .toList();
         return new CustomerGroupDto(g.getId(), g.getName(), g.getDescription(),
                 members.size(), members, products.size(), products,
-                g.getCreatedAt(), g.getUpdatedAt());
+                g.getCreatedAt(), g.getUpdatedAt(), tenantCode(g));
+    }
+
+    private static String tenantCode(CustomerGroup g) {
+        return g.getTenant() != null ? g.getTenant().getCode() : null;
     }
 }

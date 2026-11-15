@@ -68,6 +68,25 @@ public class OrderItem {
     @Builder.Default
     private Integer lineNo = 0;
 
+    // How much of this line has been invoiced so far, across all the order's (non-cancelled)
+    // invoices — an order can be delivered and invoiced in several goes (V120).
+    @Column(name = "invoiced_qty", nullable = false, precision = 10, scale = 3)
+    @Builder.Default
+    private BigDecimal invoicedQty = BigDecimal.ZERO;
+
+    // Quantity the business decided it will not supply after all ("close the balance").
+    @Column(name = "closed_qty", nullable = false, precision = 10, scale = 3)
+    @Builder.Default
+    private BigDecimal closedQty = BigDecimal.ZERO;
+
+    /** Ordered but not yet invoiced or closed. */
+    public BigDecimal getRemainingQty() {
+        BigDecimal r = quantity
+                .subtract(invoicedQty != null ? invoicedQty : BigDecimal.ZERO)
+                .subtract(closedQty != null ? closedQty : BigDecimal.ZERO);
+        return r.signum() < 0 ? BigDecimal.ZERO : r;
+    }
+
     public void calculate() {
         BigDecimal gross = unitPrice.multiply(quantity);
         discountAmount = gross.multiply(discountPct)

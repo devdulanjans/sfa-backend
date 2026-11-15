@@ -64,6 +64,7 @@ public class ProductGroupController {
     @PostMapping
     @PreAuthorize("hasAnyRole('SUPER_ADMIN','SALES_MANAGER')")
     public ResponseEntity<ProductGroupDto> create(@Valid @RequestBody SaveProductGroupRequest req) {
+        requireChannelForCreate();
         ProductGroup g = new ProductGroup();
         applyFields(g, req);
         ProductGroup saved = productGroupRepository.save(g);
@@ -106,8 +107,8 @@ public class ProductGroupController {
     @PutMapping("/by-product/{productId}")
     @PreAuthorize("hasAnyRole('SUPER_ADMIN','SALES_MANAGER')")
     public void setForProduct(@PathVariable UUID productId, @RequestBody SetGroupsForProductRequest req) {
-        Product product = productRepository.findById(productId)
-                .orElseThrow(() -> new ResourceNotFoundException("Product", productId));
+        Product product = com.sfa.security.TenantGuard.requireVisible(productRepository.findById(productId)
+                .orElseThrow(() -> new ResourceNotFoundException("Product", productId)), "Product", productId);
         Set<UUID> desiredGroupIds = req.groupIds() != null ? new HashSet<>(req.groupIds()) : Set.of();
 
         List<ProductGroup> currentGroups = productGroupRepository.findAllContainingProduct(productId);
@@ -139,8 +140,18 @@ public class ProductGroupController {
         g.setMembers(members);
     }
 
+    // findById isn't covered by the tenant filter — TenantGuard keeps other channels' groups out.
     private ProductGroup findOrThrow(UUID id) {
-        return productGroupRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("ProductGroup", id));
+        return com.sfa.security.TenantGuard.requireVisible(productGroupRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("ProductGroup", id)), "ProductGroup", id);
     }
+
+    /** A group belongs to one channel (V117). SUPER_ADMIN's platform view has none, so it
+     *  must enter the channel first (Channels → "View as this channel"). */
+    private static void requireChannelForCreate() {
+        if (com.sfa.security.TenantContext.isUnscoped() || com.sfa.security.TenantContext.getTenantId() == null) {
+            throw new BusinessException("Enter a channel first (Channels → View as this channel), then create the group there.");
+        }
+    }
+
 }

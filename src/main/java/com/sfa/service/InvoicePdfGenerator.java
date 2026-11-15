@@ -111,15 +111,17 @@ public class InvoicePdfGenerator {
     }
 
     private boolean shouldSplitFreeItems(Invoice invoice, Order order) {
-        return isSplitPromoInvoiceEnabled(invoice.getCustomer()) && !freeItems(order).isEmpty();
+        return isSplitPromoInvoiceEnabled(invoice.getCustomer()) && !freeItems(invoice.printLines()).isEmpty();
     }
 
-    private List<OrderItem> paidItems(Order order) {
-        return order.getItems().stream().filter(i -> !"FREE_PRODUCT".equals(i.getPriceSource())).toList();
+    // An invoice prints its own billed lines (Invoice.printLines) — with partial invoicing
+    // (V120) those are only part of the order's lines and quantities.
+    private List<OrderItem> paidItems(List<OrderItem> lines) {
+        return lines.stream().filter(i -> !"FREE_PRODUCT".equals(i.getPriceSource())).toList();
     }
 
-    private List<OrderItem> freeItems(Order order) {
-        return order.getItems().stream().filter(i -> "FREE_PRODUCT".equals(i.getPriceSource())).toList();
+    private List<OrderItem> freeItems(List<OrderItem> lines) {
+        return lines.stream().filter(i -> "FREE_PRODUCT".equals(i.getPriceSource())).toList();
     }
 
     /** Retail valuation of the free items (qty x price) — same fallback used for a free
@@ -155,11 +157,11 @@ public class InvoicePdfGenerator {
 
     public byte[] generate(Invoice invoice, Order order) throws IOException {
         if (!shouldSplitFreeItems(invoice, order)) {
-            return renderPdf(invoice, order, order.getItems(),
+            return renderPdf(invoice, order, invoice.printLines(),
                     invoice.getSubtotal(), invoice.getDiscountTotal(), invoice.getTaxTotal(), invoice.getTotal(), false);
         }
-        List<OrderItem> paid = paidItems(order);
-        List<OrderItem> free = freeItems(order);
+        List<OrderItem> paid = paidItems(invoice.printLines());
+        List<OrderItem> free = freeItems(invoice.printLines());
         byte[] paidDoc = renderPdf(invoice, order, paid,
                 invoice.getSubtotal(), invoice.getDiscountTotal(), invoice.getTaxTotal(), invoice.getTotal(), false);
         BigDecimal freeValue = freeItemsValue(free);
@@ -483,11 +485,11 @@ public class InvoicePdfGenerator {
 
     public byte[] generateEscPos(Invoice invoice, Order order) {
         if (!shouldSplitFreeItems(invoice, order)) {
-            return renderEscPos(invoice, order, order.getItems(),
+            return renderEscPos(invoice, order, invoice.printLines(),
                     invoice.getSubtotal(), invoice.getDiscountTotal(), invoice.getTaxTotal(), invoice.getTotal(), false);
         }
-        List<OrderItem> paid = paidItems(order);
-        List<OrderItem> free = freeItems(order);
+        List<OrderItem> paid = paidItems(invoice.printLines());
+        List<OrderItem> free = freeItems(invoice.printLines());
         byte[] paidReceipt = renderEscPos(invoice, order, paid,
                 invoice.getSubtotal(), invoice.getDiscountTotal(), invoice.getTaxTotal(), invoice.getTotal(), false);
         BigDecimal freeValue = freeItemsValue(free);
@@ -741,7 +743,7 @@ public class InvoicePdfGenerator {
         String copyLabel = pc <= 1 ? "**  ORIGINAL  **" : "**  COPY " + (pc - 1) + "  **";
         String invoiceTypeLabel = isVatInvoice ? "TAX INVOICE" : "INVOICE";
 
-        int itemCount = order.getItems().size();
+        int itemCount = invoice.printLines().size();
         float estimatedHeight = 900f + (itemCount * 20f) + 260f; // fixed content + items + logo/signatures
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         Document doc = new Document(new PdfDocument(new PdfWriter(out)),
@@ -829,7 +831,7 @@ public class InvoicePdfGenerator {
         doc.add(rLine("-".repeat(W), mono));
 
         int no = 1;
-        for (OrderItem item : order.getItems()) {
+        for (OrderItem item : invoice.printLines()) {
             boolean isFree = "FREE_PRODUCT".equals(item.getPriceSource());
             String name = trunc(item.getProduct().getName() + (isFree ? " (FREE)" : ""), 24);
             String qty  = trunc(item.getQuantity().toPlainString(), 6);

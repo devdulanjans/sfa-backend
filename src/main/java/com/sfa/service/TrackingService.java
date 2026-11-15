@@ -42,6 +42,7 @@ public class TrackingService {
     private final SystemSettingService settings;
     private final UserRepository userRepository;
     private final TenantRepository tenantRepository;
+    private final MembershipService membershipService;
 
     @PersistenceContext
     private EntityManager em;
@@ -278,18 +279,11 @@ public class TrackingService {
 
     /** Sales reps the caller may see: every rep for an unscoped/SUPER_ADMIN caller, else reps
      *  sharing one of the caller's visible channels. */
-    @SuppressWarnings("unchecked")
     private Set<UUID> visibleRepIds() {
-        List<User> reps = userRepository.findActiveByRoleName(Role.SALES_REP, User.UserStatus.ACTIVE);
-        if (TenantContext.isUnscoped()) return reps.stream().map(User::getId).collect(Collectors.toSet());
-        Set<UUID> visible = TenantContext.getVisibleTenantIds();
-        Set<UUID> out = new HashSet<>();
-        for (User r : reps) {
-            boolean shares = tenantRepository.findByUserId(r.getId()).stream()
-                    .map(Tenant::getId).anyMatch(visible::contains);
-            if (shares) out.add(r.getId());
-        }
-        return out;
+        // People who are sales reps IN the caller's business(es) — by membership (V119), so a
+        // person who's a rep here but an owner elsewhere is included, and other businesses' reps aren't.
+        return membershipService.peopleWithRoleInScope(Role.SALES_REP).stream()
+                .map(User::getId).collect(Collectors.toSet());
     }
 
     private User requireVisibleRep(UUID repId) {

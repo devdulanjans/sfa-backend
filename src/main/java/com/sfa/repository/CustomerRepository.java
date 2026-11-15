@@ -19,7 +19,20 @@ import java.util.Set;
 import java.util.UUID;
 
 public interface CustomerRepository extends JpaRepository<Customer, UUID> {
-    Optional<Customer> findByCustomerCode(String customerCode);
+    /** Customer codes are unique per channel, not platform-wide (V118) — an unscoped caller
+     *  can see the same code in several channels, hence "first". */
+    Optional<Customer> findFirstByCustomerCode(String customerCode);
+    boolean existsByCustomerCode(String customerCode);
+    boolean existsByTenantIdAndCustomerCode(UUID tenantId, String customerCode);
+
+    /** This shop's customer rows the caller can see — a JPQL query, so the tenant filter limits
+     *  it to the caller's own channel(s). Deleted rows excluded. */
+    @Query("SELECT c FROM Customer c WHERE c.shop.id = :shopId AND c.deletedAt IS NULL ORDER BY c.createdAt")
+    List<Customer> findVisibleByShopId(@Param("shopId") UUID shopId);
+
+    /** How many customer rows in ALL channels point at this shop — native, so never filtered. */
+    @Query(value = "SELECT count(*) FROM customers WHERE shop_id = :shopId", nativeQuery = true)
+    long countAllChannelsByShopId(@Param("shopId") UUID shopId);
     Page<Customer> findByStatus(Customer.CustomerStatus status, Pageable pageable);
 
     // Used by bulk channel-reassignment to pre-check the per-tenant customer_code

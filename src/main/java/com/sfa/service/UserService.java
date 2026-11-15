@@ -62,6 +62,7 @@ public class UserService {
     private final PasswordHistoryRepository passwordHistoryRepository;
     private final AuditLogService        auditLogService;
     private final UserPermissionService  userPermissionService;
+    private final MembershipService      membershipService;
 
     // A distributor login has no separate app of its own like the customer portal — it logs
     // into this same admin panel, so it needs an actual permission grant to reach anything
@@ -183,6 +184,8 @@ public class UserService {
         applyTenants(user, effectiveTenants);
 
         User saved = userRepository.save(user);
+        // A brand-new account gets its role directly (no invitation): one membership per channel.
+        membershipService.reconcileFromAccount(saved, effectiveTenants.stream().map(Tenant::getId).collect(Collectors.toSet()));
         if (req.loginDistributorId() != null) {
             userPermissionService.grant(saved.getId(), DISTRIBUTOR_LOGIN_PERMISSION, actingUserId);
         }
@@ -240,7 +243,9 @@ public class UserService {
             applyTenants(user, effectiveTenants);
         }
 
-        return UserDto.from(userRepository.save(user));
+        User saved = userRepository.save(user);
+        membershipService.reconcileFromAccount(saved, membershipScope(actor));
+        return UserDto.from(saved);
     }
 
     /** Self-service — the caller changes their OWN password. Requires the current password;
@@ -420,8 +425,40 @@ public class UserService {
         return actingUserId != null ? userRepository.findById(actingUserId).orElse(null) : null;
     }
 
+    // The role the actor is working as in THIS session (an owner here may be a rep elsewhere).
     private boolean isChannelScopedAdmin(User actor) {
-        return actor != null && Role.ADMIN.equals(actor.getRole().getName());
+        return actor != null && Role.ADMIN.equals(com.sfa.security.CurrentSession.roleOf(actor));
+    }
+
+    /** Channels whose memberships this actor's edits apply to: its own, or all for SUPER_ADMIN. */
+    private Set<UUID> membershipScope(User actor) {
+        return isChannelScopedAdmin(actor) ? actorTenantIds(actor)
+                : tenantRepository.findAll().stream().map(Tenant::getId).collect(Collectors.toSet());
+    }
+
+    /**
+     * "Add user" with an email that already has an account: instead of failing, invite that
+     * account to the chosen role in each chosen channel (V119). Empty when the email is new.
+     */
+    @Transactional
+    public Optional<List<com.sfa.dto.membership.MembershipDto>> inviteIfExistingAccount(CreateUserRequest req, UUID actingUserId) {
+        Optional<User> existing = userRepository.findByEmailIgnoreCase(req.email().trim());
+        if (existing.isEmpty()) return Optional.empty();
+        User target = existing.get();
+        rejectHiddenAccountModification(target);
+        Role role = roleRepository.findById(req.roleId())
+                .orElseThrow(() -> new ResourceNotFoundException("Role", req.roleId()));
+        User actor = loadActor(actingUserId);
+        rejectOutOfScopeTenantsForAdminActor(actor, req.tenantIds());
+        Set<Tenant> tenants = resolveEffectiveTenants(req.tenantIds(), actor);
+        if (tenants.isEmpty()) {
+            throw new BusinessException("Choose at least one channel to invite " + req.email().trim() + " to.");
+        }
+        boolean superAdmin = !isChannelScopedAdmin(actor);
+        List<com.sfa.dto.membership.MembershipDto> invites = tenants.stream()
+                .map(t -> membershipService.inviteUser(actingUserId, superAdmin, t.getId(), target, role.getName(), req.customerId()))
+                .toList();
+        return Optional.of(invites);
     }
 
     private Set<UUID> actorTenantIds(User actor) {

@@ -297,6 +297,64 @@ public class InventoryService {
         }
     }
 
+    /**
+     * Puts back the stock of the part of an approved order that will never be supplied
+     * ("close the balance", V120) — {@code qtyByItem} is order line id -> quantity closed.
+     * Costs come back from the line's original FIFO consumption, newest batch first.
+     */
+    public void restoreRemainderForOrder(Order order, java.util.Map<UUID, BigDecimal> qtyByItem, UUID userId) {
+        if (!isEnabled()) return;
+
+        for (var item : order.getItems()) {
+            BigDecimal qty = qtyByItem.get(item.getId());
+            if (qty == null || qty.signum() <= 0) continue;
+            UUID productId = item.getProduct().getId();
+
+            stockLevelRepo.ensureExists(productId);
+            StockLevel level = stockLevelRepo.findByProductIdForUpdate(productId)
+                    .orElseThrow(() -> new BusinessException("Stock level not found for product " + productId));
+
+            BigDecimal newBalance = level.getOnHand().add(qty);
+            level.setOnHand(newBalance);
+            stockLevelRepo.save(level);
+
+            StockMovement movement = movementRepo.save(StockMovement.builder()
+                    .productId(productId)
+                    .type(StockMovement.MovementType.ORDER_CANCEL_IN)
+                    .quantity(qty)
+                    .balanceAfter(newBalance)
+                    .referenceType("ORDER")
+                    .referenceId(order.getId())
+                    .createdBy(userId)
+                    .build());
+
+            movementRepo.findByReferenceTypeAndReferenceIdAndProductIdAndType(
+                    "ORDER", order.getId(), productId, StockMovement.MovementType.ORDER_OUT
+            ).ifPresent(original -> {
+                movement.setTotalCost(restoreFifoPartially(original.getId(), qty));
+                movementRepo.save(movement);
+            });
+        }
+    }
+
+    /** Like restoreFifo, but only {@code qty} of what that movement consumed. */
+    private BigDecimal restoreFifoPartially(UUID originalMovementId, BigDecimal qty) {
+        BigDecimal left = qty;
+        BigDecimal totalCost = BigDecimal.ZERO;
+        List<StockBatchConsumption> consumed = new java.util.ArrayList<>(batchConsumptionRepo.findByMovementId(originalMovementId));
+        java.util.Collections.reverse(consumed);
+        for (StockBatchConsumption consumption : consumed) {
+            if (left.signum() <= 0) break;
+            BigDecimal back = consumption.getQuantity().min(left);
+            StockBatch batch = consumption.getBatch();
+            batch.setRemainingQty(batch.getRemainingQty().add(back));
+            stockBatchRepo.save(batch);
+            totalCost = totalCost.add(back.multiply(consumption.getUnitCost()));
+            left = left.subtract(back);
+        }
+        return totalCost;
+    }
+
     // Called inside PosService for deduction and void-restore
     public void deductForPosSale(UUID saleId, UUID productId, BigDecimal qty, UUID userId) {
         doPosSaleMovement(saleId, productId, qty.negate(), StockMovement.MovementType.POS_OUT, userId);

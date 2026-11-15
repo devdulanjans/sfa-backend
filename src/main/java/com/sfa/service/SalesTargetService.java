@@ -36,13 +36,15 @@ public class SalesTargetService {
     private final OrderRepository orderRepo;
     private final WorkingCalendarService workingCalendarService;
     private final SystemSettingService systemSettingService;
+    private final MembershipService membershipService;
 
     public MonthlySalesTargetDto create(UUID repId, UUID productId, int year, int month, BigDecimal qty, UUID createdBy) {
         requireEnabled();
         User rep = userRepo.findById(repId)
                 .orElseThrow(() -> new ResourceNotFoundException("User", repId));
-        if (!Role.SALES_REP.equals(rep.getRole().getName())) {
-            throw new BusinessException("Targets can only be assigned to SALES_REP users");
+        UUID tenantId = com.sfa.security.TenantContext.isUnscoped() ? null : com.sfa.security.TenantContext.getTenantId();
+        if (!membershipService.holdsRole(rep, tenantId, Role.SALES_REP)) {
+            throw new BusinessException("Targets can only be assigned to sales reps of this business");
         }
         Product product = productRepo.findById(productId)
                 .orElseThrow(() -> new ResourceNotFoundException("Product", productId));

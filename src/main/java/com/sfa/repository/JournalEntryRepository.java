@@ -8,9 +8,13 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 
 public interface JournalEntryRepository extends JpaRepository<JournalEntry, UUID> {
+
+    List<JournalEntry> findBySourceTypeAndSourceIdAndStatus(JournalEntry.SourceType sourceType, UUID sourceId,
+                                                            JournalEntry.JournalStatus status);
 
     // Date bounds use COALESCE, not "(:param IS NULL OR ...)" — see JournalEntryLineRepository
     // for why a date parameter appearing only in an IS NULL check makes Postgres unable to infer

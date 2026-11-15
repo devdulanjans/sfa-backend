@@ -73,7 +73,7 @@ public class PermissionController {
     @GetMapping("/api/users/{userId}/permissions")
     @PreAuthorize("hasRole('SUPER_ADMIN')")
     public List<String> getUserPermissions(@PathVariable UUID userId) {
-        return permissionService.getUserPermissionKeys(userId);
+        return permissionService.getKeysForEditing(userId);
     }
 
     /** Replace the full permission set for a user. Body: { "permissions": ["KEY1","KEY2",...] } */

@@ -24,8 +24,9 @@ public class InvoicePayment {
     @JoinColumn(name = "invoice_id", nullable = false)
     private Invoice invoice;
 
+    // Optional (V120): without a bank account the money is held on Cash on Hand (1050).
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "bank_account_id", nullable = false)
+    @JoinColumn(name = "bank_account_id")
     private BankAccount bankAccount;
 
     @Column(nullable = false, precision = 14, scale = 2)
@@ -47,6 +48,27 @@ public class InvoicePayment {
 
     @Column(name = "created_by")
     private UUID createdBy;
+
+    @Column(columnDefinition = "text")
+    private String notes;
+
+    // A customer payment settled across several invoices shares one receipt number.
+    @Column(name = "receipt_number", length = 30)
+    private String receiptNumber;
+
+    // A payment recorded by mistake is voided (its ledger entry reversed), never deleted.
+    @Column(name = "voided_at")
+    private Instant voidedAt;
+
+    @Column(name = "voided_by")
+    private UUID voidedBy;
+
+    @Column(name = "void_reason", length = 255)
+    private String voidReason;
+
+    public boolean isVoided() {
+        return voidedAt != null;
+    }
 
     @CreatedDate
     @Column(name = "created_at", nullable = false, updatable = false)

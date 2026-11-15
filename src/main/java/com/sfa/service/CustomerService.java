@@ -54,6 +54,7 @@ public class CustomerService {
     private final TenantAccessService tenantAccessService;
     private final ChannelMembershipService channelMembershipService;
     private final AuditLogService auditLogService;
+    private final ShopService shopService;
 
     @PersistenceContext
     private EntityManager em;
@@ -160,14 +161,21 @@ public class CustomerService {
 
     @Transactional
     public CustomerDto create(CreateCustomerRequest req, UUID actingUserId) {
-        if (customerRepository.findByCustomerCode(req.customerCode()).isPresent()) {
-            throw new BusinessException("Customer code already exists: " + req.customerCode());
-        }
         Customer c = new Customer();
         applyFields(c, req);
         tenantAccessService.resolveExplicitTenant(req.tenantId(), actingUserId, "customer")
                 .ifPresent(c::setTenant);
+        // Codes are unique per business (V118), so two businesses can both have "C-001".
+        UUID homeTenantId = c.getTenant() != null ? c.getTenant().getId()
+                : com.sfa.security.TenantContext.getTenantId();
+        if (homeTenantId != null
+                ? customerRepository.existsByTenantIdAndCustomerCode(homeTenantId, req.customerCode())
+                : customerRepository.existsByCustomerCode(req.customerCode())) {
+            throw new BusinessException("Customer code already exists: " + req.customerCode());
+        }
         channelMembershipService.initChannels(c, req.tenantIds(), actingUserId);
+        // The shared real-world shop: the one the user picked, an unambiguous match, or a new one.
+        shopService.attachShopForNewCustomer(c, req.shopId());
         Customer saved = customerRepository.save(c);
         auditLogService.log(null, "CREATE", "Customer", saved.getId(), null, saved);
         return CustomerDto.from(saved);
@@ -179,6 +187,7 @@ public class CustomerService {
         Object before = CustomerDto.from(c);
         applyFields(c, req);
         channelMembershipService.setChannels(c, req.tenantIds(), actingUserId);
+        shopService.syncFromCustomer(c);
         Customer saved = customerRepository.save(c);
         auditLogService.log(null, "UPDATE", "Customer", saved.getId(), before, CustomerDto.from(saved));
         return CustomerDto.from(saved);
@@ -239,6 +248,7 @@ public class CustomerService {
         c.setName(req.name());
         c.setPhone(req.phone());
         c.setSource(Customer.CustomerSource.POS);
+        shopService.attachShopForNewCustomer(c, null);
         Customer saved = customerRepository.save(c);
         auditLogService.log(null, "CREATE", "Customer", saved.getId(), null, saved);
         return CustomerDto.from(saved);

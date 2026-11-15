@@ -3,16 +3,21 @@ package com.sfa.service;
 import com.sfa.dto.invoice.InvoiceSummaryDto;
 import com.sfa.entity.ChartOfAccount;
 import com.sfa.entity.Invoice;
+import com.sfa.entity.InvoiceItem;
 import com.sfa.entity.JournalEntry;
 import com.sfa.entity.Order;
+import com.sfa.entity.OrderItem;
 import com.sfa.exception.BusinessException;
 import com.sfa.exception.ResourceNotFoundException;
 import com.sfa.notification.SalesDocumentEvent;
 import com.sfa.repository.ChartOfAccountRepository;
+import com.sfa.repository.InvoiceItemRepository;
 import com.sfa.repository.InvoiceRepository;
+import com.sfa.repository.JournalEntryRepository;
 import com.sfa.repository.OrderRepository;
 import com.sfa.security.TenantGuard;
 import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.criteria.Join;
 import jakarta.persistence.criteria.JoinType;
@@ -28,12 +33,14 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.time.format.TextStyle;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -59,6 +66,8 @@ public class InvoiceService {
     private final JournalEntryService      journalEntryService;
     private final ChartOfAccountRepository accountRepo;
     private final ApplicationEventPublisher events;
+    private final InvoiceItemRepository    invoiceItemRepo;
+    private final JournalEntryRepository   journalEntryRepo;
 
     @PersistenceContext
     private EntityManager em;
@@ -73,8 +82,26 @@ public class InvoiceService {
             LocalDate issuedFrom,
             LocalDate issuedTo,
             LocalDate dueFrom,
-            LocalDate dueTo
-    ) {}
+            LocalDate dueTo,
+            /** UNPAID, PARTIALLY_PAID, PAID, OUTSTANDING (unpaid or part paid), OVERDUE, CANCELLED; null = all. */
+            String    paymentStatus
+    ) {
+        public InvoiceFilter(String invoiceNo, String orderNo, UUID customerId, UUID salesRepId,
+                             LocalDate createdFrom, LocalDate createdTo, LocalDate issuedFrom, LocalDate issuedTo,
+                             LocalDate dueFrom, LocalDate dueTo) {
+            this(invoiceNo, orderNo, customerId, salesRepId, createdFrom, createdTo, issuedFrom, issuedTo,
+                    dueFrom, dueTo, null);
+        }
+    }
+
+    /** An order line and how much of it to invoice now. */
+    public record InvoiceLineRequest(UUID orderItemId, BigDecimal quantity) {}
+
+    /**
+     * What to invoice. No lines = everything still to invoice on the order (the on-the-spot
+     * invoice); otherwise only these quantities, the rest stays open for a later invoice.
+     */
+    public record CreateInvoiceRequest(List<InvoiceLineRequest> lines, LocalDate dueDate, String notes) {}
 
     @Transactional(readOnly = true)
     public Page<InvoiceSummaryDto> listInvoices(InvoiceFilter f, Pageable pageable) {
@@ -142,6 +169,24 @@ public class InvoiceService {
             if (f.dueTo() != null)
                 predicates.add(cb.lessThanOrEqualTo(root.get("dueDate"), f.dueTo()));
 
+            String ps = blank(f.paymentStatus());
+            if (ps != null) {
+                var status = root.<Invoice.InvoiceStatus>get("status");
+                var unpaidStatuses = List.of(Invoice.InvoiceStatus.ISSUED, Invoice.InvoiceStatus.PARTIALLY_PAID);
+                switch (ps.toUpperCase(Locale.ROOT)) {
+                    case "UNPAID" -> predicates.add(cb.and(status.in(unpaidStatuses),
+                            cb.equal(root.get("paidAmount"), BigDecimal.ZERO)));
+                    case "PARTIALLY_PAID" -> predicates.add(cb.and(status.in(unpaidStatuses),
+                            cb.greaterThan(root.get("paidAmount"), BigDecimal.ZERO)));
+                    case "PAID" -> predicates.add(cb.equal(status, Invoice.InvoiceStatus.PAID));
+                    case "CANCELLED" -> predicates.add(cb.equal(status, Invoice.InvoiceStatus.CANCELLED));
+                    case "OUTSTANDING" -> predicates.add(status.in(unpaidStatuses));
+                    case "OVERDUE" -> predicates.add(cb.and(status.in(unpaidStatuses),
+                            cb.lessThan(root.get("dueDate"), LocalDate.now())));
+                    default -> throw new BusinessException("Unknown payment status: " + ps);
+                }
+            }
+
             return cb.and(predicates.toArray(new Predicate[0]));
         };
     }
@@ -154,36 +199,81 @@ public class InvoiceService {
     @Transactional(readOnly = true)
     public Map<UUID, String> getInvoiceNumbersForOrders(Collection<UUID> orderIds) {
         if (orderIds.isEmpty()) return Map.of();
+        // An order can have several invoices (V120): "A, B" in the order they were raised.
         return invoiceRepo.findByOrderIdIn(orderIds).stream()
-                .collect(Collectors.toMap(inv -> inv.getOrder().getId(), Invoice::getInvoiceNumber));
+                .filter(inv -> inv.getStatus() != Invoice.InvoiceStatus.CANCELLED)
+                .sorted(java.util.Comparator.comparing(Invoice::getCreatedAt,
+                        java.util.Comparator.nullsLast(java.util.Comparator.naturalOrder())))
+                .collect(Collectors.toMap(inv -> inv.getOrder().getId(), Invoice::getInvoiceNumber,
+                        (a, b) -> a + ", " + b, LinkedHashMap::new));
     }
 
+    /** Every invoice raised for an order, oldest first (cancelled ones included, marked so). */
+    @Transactional(readOnly = true)
+    public List<Invoice> listForOrder(UUID orderId) {
+        Order order = orderRepo.findById(orderId)
+                .orElseThrow(() -> new ResourceNotFoundException("Order", orderId));
+        TenantGuard.requireVisible(order, "Order", orderId);
+        return invoiceRepo.findByOrderIdOrderByCreatedAtAsc(orderId);
+    }
+
+    /** Invoices everything still to invoice on the order — the on-the-spot invoice. */
     public Invoice generateInvoice(UUID orderId, UUID userId) {
+        return generateInvoice(orderId, null, userId);
+    }
+
+    /**
+     * Raises an invoice for all or part of an approved order (V120). Each line bills the
+     * chosen quantity at the order's price; its discount and tax are the same share of the
+     * line's, and the invoice that bills the last of a line bills exactly what's left of it —
+     * so an order invoiced in several goes adds up to the order total to the cent.
+     */
+    public Invoice generateInvoice(UUID orderId, CreateInvoiceRequest request, UUID userId) {
         Order order = orderRepo.findById(orderId)
                 .orElseThrow(() -> new ResourceNotFoundException("Order", orderId));
         order = TenantGuard.requireVisible(order, "Order", orderId);
+        // Two people invoicing the same order at once must not both bill the same quantity.
+        em.flush();
+        em.refresh(order, LockModeType.PESSIMISTIC_WRITE);
 
-        if (order.getStatus() != Order.OrderStatus.APPROVED) {
-            throw new BusinessException("Only APPROVED orders can be invoiced");
-        }
-        if (invoiceRepo.existsByOrderId(orderId)) {
-            throw new BusinessException("Invoice already exists for this order");
+        if (order.getStatus() != Order.OrderStatus.APPROVED
+                && order.getStatus() != Order.OrderStatus.PARTIALLY_INVOICED) {
+            throw new BusinessException(order.getStatus() == Order.OrderStatus.INVOICED
+                    ? "This order is fully invoiced — nothing is left to invoice"
+                    : "Only approved orders can be invoiced");
         }
 
+        Map<UUID, BigDecimal> wanted = quantitiesToInvoice(order, request);
+
+        LocalDate today = LocalDate.now();
         Invoice invoice = Invoice.builder()
                 .invoiceNumber(generateInvoiceNumber(order))
                 .order(order)
                 .tenant(order.getTenant())
                 .customer(order.getCustomer())
-                .issuedDate(LocalDate.now())
-                .dueDate(LocalDate.now().plusDays(30))
-                .subtotal(order.getSubtotal())
-                .taxTotal(order.getTaxAmount())
-                .discountTotal(order.getDiscountAmount())
-                .total(order.getTotal())
+                .issuedDate(today)
+                .dueDate(request != null && request.dueDate() != null ? request.dueDate() : defaultDueDate(order, today))
                 .status(Invoice.InvoiceStatus.ISSUED)
+                .notes(request != null ? blank(request.notes()) : null)
                 .createdBy(userId)
                 .build();
+
+        BigDecimal subtotal = BigDecimal.ZERO, discount = BigDecimal.ZERO, tax = BigDecimal.ZERO;
+        for (OrderItem item : order.getItems()) {
+            BigDecimal qty = wanted.get(item.getId());
+            if (qty == null) continue;
+            InvoiceItem line = billLine(item, qty);
+            invoice.addItem(line);
+            item.setInvoicedQty(item.getInvoicedQty().add(qty));
+            subtotal = subtotal.add(line.getUnitPrice().multiply(qty));
+            discount = discount.add(line.getDiscountAmount());
+            tax      = tax.add(line.getTaxAmount());
+        }
+        subtotal = subtotal.setScale(2, RoundingMode.HALF_UP);
+        invoice.setSubtotal(subtotal);
+        invoice.setDiscountTotal(discount);
+        invoice.setTaxTotal(tax);
+        invoice.setTotal(subtotal.subtract(discount).add(tax));
 
         Invoice saved = invoiceRepo.save(invoice);
 
@@ -205,14 +295,16 @@ public class InvoiceService {
                     saved.getInvoiceNumber(), ex.getMessage());
         }
 
-        // Update order status
-        order.setStatus(Order.OrderStatus.INVOICED);
+        // Partly invoiced until nothing is left to invoice or close.
+        order.setStatus(order.hasRemainingToInvoice()
+                ? Order.OrderStatus.PARTIALLY_INVOICED : Order.OrderStatus.INVOICED);
         orderRepo.save(order);
 
         auditLog.log(userId, "GENERATE", "INVOICE", saved.getId(), null,
                 Map.of("invoiceNumber", saved.getInvoiceNumber(),
                        "status",        saved.getStatus().name(),
-                       "total",         saved.getTotal()));
+                       "total",         saved.getTotal(),
+                       "orderStatus",   order.getStatus().name()));
         events.publishEvent(SalesDocumentEvent.invoiceGenerated(saved.getId()));
         return saved;
     }
@@ -291,11 +383,146 @@ public class InvoiceService {
         return TenantGuard.requireVisible(invoice, "Invoice", id);
     }
 
+    /** The order's most recent invoice that wasn't cancelled (an order can have several). */
     @Transactional(readOnly = true)
     public Invoice getInvoiceByOrder(UUID orderId) {
-        Invoice invoice = invoiceRepo.findByOrderId(orderId)
+        Invoice invoice = invoiceRepo.findByOrderIdOrderByCreatedAtAsc(orderId).stream()
+                .filter(i -> i.getStatus() != Invoice.InvoiceStatus.CANCELLED)
+                .reduce((first, second) -> second)
                 .orElseThrow(() -> new ResourceNotFoundException("Invoice for order", orderId));
         return TenantGuard.requireVisible(invoice, "Invoice for order", orderId);
+    }
+
+    /**
+     * Cancels an invoice raised by mistake (V120): reverses its ledger entry and gives its
+     * quantities back to the order, so they can be invoiced again. Refused while it has
+     * payments — void those first, so no money is silently left unallocated.
+     */
+    public Invoice cancelInvoice(UUID invoiceId, String reason, UUID userId) {
+        Invoice invoice = getInvoice(invoiceId);
+        if (invoice.getStatus() == Invoice.InvoiceStatus.CANCELLED) {
+            throw new BusinessException("Invoice is already cancelled");
+        }
+        if (invoice.getPaidAmount() != null && invoice.getPaidAmount().signum() > 0) {
+            throw new BusinessException("This invoice has payments of " + invoice.getPaidAmount()
+                    + " — void them before cancelling the invoice");
+        }
+        Order order = invoice.getOrder();
+        em.flush();
+        em.refresh(order, LockModeType.PESSIMISTIC_WRITE);
+
+        for (JournalEntry entry : journalEntryRepo.findBySourceTypeAndSourceIdAndStatus(
+                JournalEntry.SourceType.INVOICE_ISSUED, invoice.getId(), JournalEntry.JournalStatus.POSTED)) {
+            journalEntryService.voidEntry(entry.getId(), userId);
+        }
+
+        for (InvoiceItem line : invoice.getItems()) {
+            OrderItem item = line.getOrderItem();
+            BigDecimal back = item.getInvoicedQty().subtract(line.getQuantity());
+            item.setInvoicedQty(back.signum() < 0 ? BigDecimal.ZERO : back);
+        }
+        Invoice.InvoiceStatus previous = invoice.getStatus();
+        invoice.setStatus(Invoice.InvoiceStatus.CANCELLED);
+        invoice.setCancelledAt(Instant.now());
+        invoice.setCancelledBy(userId);
+        invoice.setCancelReason(blank(reason));
+        invoiceRepo.save(invoice);
+
+        if (order.getStatus() != Order.OrderStatus.CANCELLED) {
+            order.setStatus(!order.hasInvoicedAnything() ? Order.OrderStatus.APPROVED
+                    : order.hasRemainingToInvoice() ? Order.OrderStatus.PARTIALLY_INVOICED
+                    : Order.OrderStatus.INVOICED);
+            orderRepo.save(order);
+        }
+
+        auditLog.log(userId, "CANCEL", "INVOICE", invoice.getId(), previous, Invoice.InvoiceStatus.CANCELLED);
+        return invoice;
+    }
+
+    /** Line id -> quantity to bill now, validated against what's left on each line. */
+    private Map<UUID, BigDecimal> quantitiesToInvoice(Order order, CreateInvoiceRequest request) {
+        Map<UUID, BigDecimal> wanted = new LinkedHashMap<>();
+        if (request == null || request.lines() == null || request.lines().isEmpty()) {
+            for (OrderItem item : order.getItems()) {
+                if (item.getRemainingQty().signum() > 0) wanted.put(item.getId(), item.getRemainingQty());
+            }
+        } else {
+            Map<UUID, OrderItem> byId = order.getItems().stream()
+                    .collect(Collectors.toMap(OrderItem::getId, i -> i));
+            for (InvoiceLineRequest line : request.lines()) {
+                if (line == null || line.quantity() == null || line.quantity().signum() == 0) continue;
+                OrderItem item = byId.get(line.orderItemId());
+                if (item == null) {
+                    throw new BusinessException("That item isn't on order " + order.getOrderNumber());
+                }
+                if (line.quantity().signum() < 0) {
+                    throw new BusinessException("Quantity for " + item.getProduct().getName() + " can't be negative");
+                }
+                BigDecimal qty = wanted.getOrDefault(item.getId(), BigDecimal.ZERO).add(line.quantity());
+                if (qty.compareTo(item.getRemainingQty()) > 0) {
+                    throw new BusinessException("Only " + item.getRemainingQty().stripTrailingZeros().toPlainString()
+                            + " of " + item.getProduct().getName() + " is left to invoice");
+                }
+                wanted.put(item.getId(), qty);
+            }
+        }
+        if (wanted.isEmpty()) {
+            throw new BusinessException("Nothing to invoice — choose a quantity for at least one item");
+        }
+        return wanted;
+    }
+
+    /** Bills {@code qty} of an order line — its share, or exactly the rest when it's the last of it. */
+    private InvoiceItem billLine(OrderItem item, BigDecimal qty) {
+        BigDecimal discount, tax, lineTotal;
+        boolean last = qty.compareTo(item.getRemainingQty()) == 0 && item.getClosedQty().signum() == 0;
+        if (qty.compareTo(item.getQuantity()) == 0) {
+            discount = item.getDiscountAmount();
+            tax = item.getTaxAmount();
+            lineTotal = item.getLineTotal();
+        } else if (last) {
+            Object[] billed = invoiceItemRepo.billedSoFar(item.getId()).get(0);
+            discount  = item.getDiscountAmount().subtract((BigDecimal) billed[0]);
+            tax       = item.getTaxAmount().subtract((BigDecimal) billed[1]);
+            lineTotal = item.getLineTotal().subtract((BigDecimal) billed[2]);
+        } else {
+            discount  = share(item.getDiscountAmount(), qty, item.getQuantity());
+            tax       = share(item.getTaxAmount(), qty, item.getQuantity());
+            lineTotal = item.getUnitPrice().multiply(qty).subtract(discount).add(tax).setScale(2, RoundingMode.HALF_UP);
+        }
+        return InvoiceItem.builder()
+                .orderItem(item)
+                .product(item.getProduct())
+                .quantity(qty)
+                .unitPrice(item.getUnitPrice())
+                .discountPct(item.getDiscountPct())
+                .taxPct(item.getTaxPct())
+                .discountAmount(nz(discount))
+                .taxAmount(nz(tax))
+                .lineTotal(nz(lineTotal))
+                .priceSource(item.getPriceSource())
+                .promotionName(item.getPromotionName())
+                .lineNo(item.getLineNo())
+                .build();
+    }
+
+    private static BigDecimal share(BigDecimal amount, BigDecimal part, BigDecimal whole) {
+        if (amount == null || whole.signum() == 0) return BigDecimal.ZERO;
+        return amount.multiply(part).divide(whole, 2, RoundingMode.HALF_UP);
+    }
+
+    private static BigDecimal nz(BigDecimal v) {
+        return v == null ? BigDecimal.ZERO : v;
+    }
+
+    /** The customer's credit days (or its head office's), else 30 days. */
+    private static LocalDate defaultDueDate(Order order, LocalDate issued) {
+        var customer = order.getCustomer();
+        Integer days = customer.getCreditDays();
+        if ((days == null || days <= 0) && customer.getParentCustomer() != null) {
+            days = customer.getParentCustomer().getCreditDays();
+        }
+        return issued.plusDays(days != null && days > 0 ? days : 30);
     }
 
     /**

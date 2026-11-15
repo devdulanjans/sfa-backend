@@ -180,7 +180,7 @@ public class CustomerImportService {
 
                     UUID parentCustomerId = null;
                     if (!isBlank(parentCode)) {
-                        parentCustomerId = customerRepository.findByCustomerCode(parentCode.trim())
+                        parentCustomerId = customerRepository.findFirstByCustomerCode(parentCode.trim())
                                 .orElseThrow(() -> new IllegalArgumentException(
                                         "Parent Customer Code not found: \"" + parentCode.trim() + "\""))
                                 .getId();
@@ -192,7 +192,7 @@ public class CustomerImportService {
                             creditLimit, creditDays, null, false,
                             List.of(new AddressRequest(label, addressLine.trim())),
                             parentCustomerId, null, null, null,
-                null);
+                null, null);
 
                     customerService.create(req, actingUserId);
                     successCount++;

@@ -30,6 +30,7 @@ public class DashboardController {
 
     private final OrderRepository orderRepo;
     private final UserRepository  userRepository;
+    private final com.sfa.service.MembershipService membershipService;
 
     @GetMapping
     public DashboardDto dashboard(
@@ -137,9 +138,10 @@ public class DashboardController {
 
     // ── Sales reps list ───────────────────────────────────────────────────────
 
+    /** Sales reps of the business the caller is working in (all reps only in the platform view). */
     @GetMapping("/sales-reps")
     public List<SalesRepInfo> salesReps() {
-        return userRepository.findActiveByRoleName(Role.SALES_REP, User.UserStatus.ACTIVE)
+        return membershipService.peopleWithRoleInScope(Role.SALES_REP)
                 .stream()
                 .map(u -> new SalesRepInfo(u.getId(), u.getFullName(), u.getUsername()))
                 .toList();

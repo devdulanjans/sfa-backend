@@ -50,7 +50,11 @@ public record OrderResponseDto(
             BigDecimal taxAmount,
             BigDecimal lineTotal,
             String priceSource,
-            String promotionName
+            String promotionName,
+            /** V120 partial invoicing: invoiced so far, closed (won't be supplied), still to invoice. */
+            BigDecimal invoicedQty,
+            BigDecimal closedQty,
+            BigDecimal remainingQty
     ) {
         public record ProductSummary(UUID id, String name, String productCode) {}
     }
@@ -101,7 +105,10 @@ public record OrderResponseDto(
                             item.getTaxAmount(),
                             item.getLineTotal(),
                             item.getPriceSource(),
-                            item.getPromotionName()
+                            item.getPromotionName(),
+                            item.getInvoicedQty(),
+                            item.getClosedQty(),
+                            item.getRemainingQty()
                     );
                 }).toList(),
                 t == null ? null : t.getId(),

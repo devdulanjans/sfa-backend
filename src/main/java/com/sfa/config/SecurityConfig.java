@@ -44,6 +44,8 @@ public class SecurityConfig {
         "/api/auth/login",
         "/api/auth/refresh",
         "/api/company-profile/logo",
+        // Public website (see PublicSiteController) — anonymous, read-only shop-window data.
+        "/api/public/**",
         "/swagger-ui/**",
         "/swagger-ui.html",
         "/api-docs/**",

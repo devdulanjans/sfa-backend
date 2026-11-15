@@ -64,9 +64,10 @@ public class DetailedExportGenerator {
             "DiscountValue", "FreeIssueValue", "NetSalesValue"
     };
 
+    /** {@code lines}: what the row set covers — an invoice's own billed lines (V120), or the order's. */
     private record Entry(Order order, String invoiceNumber, LocalDate issuedDate, LocalDate dueDate,
                           String status, BigDecimal subtotal, BigDecimal discountTotal,
-                          BigDecimal taxTotal, BigDecimal grandTotal) {}
+                          BigDecimal taxTotal, BigDecimal grandTotal, List<OrderItem> lines) {}
 
     public byte[] generateOrderExcel(Order order) throws IOException {
         return generateOrdersDetailExcel(List.of(order));
@@ -86,13 +87,15 @@ public class DetailedExportGenerator {
 
     private Entry toEntry(Order order) {
         return new Entry(order, null, null, null, order.getStatus().name(),
-                order.getSubtotal(), order.getDiscountAmount(), order.getTaxAmount(), order.getTotal());
+                order.getSubtotal(), order.getDiscountAmount(), order.getTaxAmount(), order.getTotal(),
+                order.getItems());
     }
 
     private Entry toEntry(Invoice invoice) {
         return new Entry(invoice.getOrder(), invoice.getInvoiceNumber(), invoice.getIssuedDate(), invoice.getDueDate(),
                 invoice.getStatus().name(),
-                invoice.getSubtotal(), invoice.getDiscountTotal(), invoice.getTaxTotal(), invoice.getTotal());
+                invoice.getSubtotal(), invoice.getDiscountTotal(), invoice.getTaxTotal(), invoice.getTotal(),
+                invoice.printLines());
     }
 
     private byte[] build(List<Entry> entries) throws IOException {
@@ -149,7 +152,7 @@ public class DetailedExportGenerator {
         String salesRepName  = order.getSalesRep() != null ? order.getSalesRep().getFullName() : "";
 
         int r = startRow;
-        for (OrderItem item : order.getItems()) {
+        for (OrderItem item : entry.lines()) {
             Product product = item.getProduct();
             Row row = sheet.createRow(r++);
             int c = 0;
@@ -248,7 +251,7 @@ public class DetailedExportGenerator {
         String invoiceNumber = invoice.getInvoiceNumber() != null ? invoice.getInvoiceNumber() : "";
 
         int r = startRow;
-        for (OrderItem item : order.getItems()) {
+        for (OrderItem item : invoice.printLines()) {
             Product product = item.getProduct();
             Row row = sheet.createRow(r++);
             int c = 0;

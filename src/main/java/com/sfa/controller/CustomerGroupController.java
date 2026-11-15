@@ -72,6 +72,7 @@ public class CustomerGroupController {
     @PostMapping
     @PreAuthorize("hasAnyRole('SUPER_ADMIN','SALES_MANAGER')")
     public ResponseEntity<CustomerGroupDto> create(@Valid @RequestBody SaveCustomerGroupRequest req) {
+        requireChannelForCreate();
         CustomerGroup g = new CustomerGroup();
         applyFields(g, req);
         CustomerGroup saved = customerGroupRepository.save(g);
@@ -109,8 +110,18 @@ public class CustomerGroupController {
         g.setAssignedProducts(products);
     }
 
+    // findById isn't covered by the tenant filter — TenantGuard keeps other channels' groups out.
     private CustomerGroup findOrThrow(UUID id) {
-        return customerGroupRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("CustomerGroup", id));
+        return com.sfa.security.TenantGuard.requireVisible(customerGroupRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("CustomerGroup", id)), "CustomerGroup", id);
     }
+
+    /** A group belongs to one channel (V117). SUPER_ADMIN's platform view has none, so it
+     *  must enter the channel first (Channels → "View as this channel"). */
+    private static void requireChannelForCreate() {
+        if (com.sfa.security.TenantContext.isUnscoped() || com.sfa.security.TenantContext.getTenantId() == null) {
+            throw new BusinessException("Enter a channel first (Channels → View as this channel), then create the group there.");
+        }
+    }
+
 }

@@ -168,6 +168,13 @@ public class Customer implements MultiChannelScoped {
     @com.fasterxml.jackson.annotation.JsonIgnore
     private SalesRoute suggestedRoute;
 
+    /** The shared real-world shop this business's customer account is for (V118) — several
+     *  businesses' customer rows can point at the same shop. See ShopService. */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "shop_id")
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private Shop shop;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "suggested_by")
     @com.fasterxml.jackson.annotation.JsonIgnore

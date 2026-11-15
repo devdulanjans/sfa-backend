@@ -138,6 +138,20 @@ public class Order implements TenantScoped {
         total          = subtotal.subtract(discountAmount).add(taxAmount);
     }
 
-    public enum OrderStatus { DRAFT, SUBMITTED, APPROVED, INVOICED, CANCELLED }
+    /** Anything still to invoice on this order? */
+    public boolean hasRemainingToInvoice() {
+        return items.stream().anyMatch(i -> i.getRemainingQty().signum() > 0);
+    }
+
+    /** Has any part of it been invoiced (by an invoice that wasn't cancelled)? */
+    public boolean hasInvoicedAnything() {
+        return items.stream().anyMatch(i -> i.getInvoicedQty() != null && i.getInvoicedQty().signum() > 0);
+    }
+
+    /**
+     * PARTIALLY_INVOICED — some, not all, of an approved order is invoiced; the rest can be
+     * invoiced later or closed. INVOICED — nothing is left to invoice.
+     */
+    public enum OrderStatus { DRAFT, SUBMITTED, APPROVED, PARTIALLY_INVOICED, INVOICED, CANCELLED }
     public enum OrderSource { SALES_REP, CUSTOMER_APP }
 }

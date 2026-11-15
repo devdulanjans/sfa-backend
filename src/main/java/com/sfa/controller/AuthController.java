@@ -51,6 +51,18 @@ public class AuthController {
         return ResponseEntity.ok(authService.switchTenant(request.tenantId(), token, principal.getId()));
     }
 
+    /** Switches the session to another workspace (a role in a business) of the same account. */
+    @PostMapping("/switch-membership")
+    @Operation(summary = "Switch to another of your workspaces (role in a business)")
+    public ResponseEntity<LoginResponse> switchMembership(
+            @RequestHeader("Authorization") String bearerToken,
+            @RequestBody java.util.Map<String, java.util.UUID> body,
+            @AuthenticationPrincipal UserDetailsImpl principal) {
+        java.util.UUID membershipId = body.get("membershipId");
+        if (membershipId == null) throw new com.sfa.exception.BusinessException("membershipId is required");
+        return ResponseEntity.ok(authService.switchMembership(membershipId, bearerToken.substring(7), principal.getId()));
+    }
+
     @PostMapping("/change-password")
     @Operation(summary = "Change your own password (requires current password)")
     public ResponseEntity<Void> changePassword(

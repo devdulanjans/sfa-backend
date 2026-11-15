@@ -209,6 +209,18 @@ public class OrderController {
         return ResponseEntity.ok(OrderResponseDto.from(orderService.approveOrder(id, user.getId())));
     }
 
+    public record CloseBalanceRequest(String reason) {}
+
+    @PostMapping("/{id}/close-balance")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','SALES_MANAGER','FINANCE_USER')")
+    @Operation(summary = "Close what's still to invoice on a partly invoiced order — it won't be supplied; stock goes back")
+    public ResponseEntity<OrderResponseDto> closeBalance(@PathVariable UUID id,
+                                                        @RequestBody(required = false) CloseBalanceRequest request,
+                                                        @AuthenticationPrincipal UserDetailsImpl user) {
+        orderService.closeRemaining(id, request != null ? request.reason() : null, user.getId());
+        return get(id);
+    }
+
     @PostMapping("/{id}/cancel")
     @PreAuthorize("hasAnyRole('SUPER_ADMIN','SALES_MANAGER')")
     @Operation(summary = "Cancel an order")

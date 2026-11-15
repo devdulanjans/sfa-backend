@@ -11,6 +11,8 @@ import com.sfa.security.TenantAwareEntityListener;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 @Entity
@@ -40,9 +42,16 @@ public class Invoice implements TenantScoped {
     @Column(name = "invoice_number", nullable = false, unique = true, length = 20)
     private String invoiceNumber;
 
-    @OneToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "order_id", nullable = false, unique = true)
+    // An order can be invoiced in several goes (V120) — each invoice bills part of it.
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "order_id", nullable = false)
     private Order order;
+
+    /** What this invoice bills: the chosen quantity of each order line (V120). */
+    @OneToMany(mappedBy = "invoice", cascade = CascadeType.ALL, orphanRemoval = true)
+    @OrderBy("lineNo ASC")
+    @Builder.Default
+    private List<InvoiceItem> items = new ArrayList<>();
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "customer_id", nullable = false)
@@ -92,6 +101,48 @@ public class Invoice implements TenantScoped {
 
     @Column(name = "created_by")
     private UUID createdBy;
+
+    @Column(columnDefinition = "text")
+    private String notes;
+
+    @Column(name = "cancelled_at")
+    private Instant cancelledAt;
+
+    @Column(name = "cancelled_by")
+    private UUID cancelledBy;
+
+    @Column(name = "cancel_reason", length = 255)
+    private String cancelReason;
+
+    public void addItem(InvoiceItem item) {
+        items.add(item);
+        item.setInvoice(this);
+    }
+
+    /** Still to be paid (never negative). */
+    public BigDecimal getBalance() {
+        if (status == InvoiceStatus.CANCELLED) return BigDecimal.ZERO;
+        BigDecimal b = (total != null ? total : BigDecimal.ZERO)
+                .subtract(paidAmount != null ? paidAmount : BigDecimal.ZERO);
+        return b.signum() < 0 ? BigDecimal.ZERO : b;
+    }
+
+    /** Unpaid (in full or part) and past its due date. */
+    public boolean isOverdue() {
+        return getBalance().signum() > 0 && dueDate != null && dueDate.isBefore(LocalDate.now());
+    }
+
+    /**
+     * The lines to print / export / send for this invoice — its own billed quantities as
+     * detached OrderItems. Falls back to the order's lines only for an invoice that somehow
+     * has none (every invoice from before V120 was backfilled with its order's lines).
+     */
+    public List<OrderItem> printLines() {
+        if (items != null && !items.isEmpty()) {
+            return items.stream().map(InvoiceItem::asPrintLine).toList();
+        }
+        return order != null ? order.getItems() : List.of();
+    }
 
     public void incrementPrintCount() {
         this.printCount = (this.printCount == null ? 0 : this.printCount) + 1;

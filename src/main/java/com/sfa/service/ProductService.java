@@ -133,9 +133,6 @@ public class ProductService {
 
     @Transactional
     public ProductDto create(CreateProductRequest req, UUID actingUserId) {
-        if (productRepository.findByProductCode(req.productCode()).isPresent()) {
-            throw new BusinessException("Product code already exists: " + req.productCode());
-        }
         checkBarcodeUnique(req.barcode(), null);
         Product p = new Product();
         applyFields(p, req);
@@ -147,6 +144,14 @@ public class ProductService {
         // TenantAwareEntityListener stamps the ambient channel automatically on save().
         tenantAccessService.resolveExplicitTenant(req.tenantId(), actingUserId, "product")
                 .ifPresent(p::setTenant);
+        // Codes are unique per business (V118), so two businesses can both have "P-001".
+        UUID homeTenantId = p.getTenant() != null ? p.getTenant().getId()
+                : com.sfa.security.TenantContext.getTenantId();
+        if (homeTenantId != null
+                ? productRepository.existsByTenantIdAndProductCode(homeTenantId, req.productCode())
+                : productRepository.existsByProductCode(req.productCode())) {
+            throw new BusinessException("Product code already exists: " + req.productCode());
+        }
         channelMembershipService.initChannels(p, req.tenantIds(), actingUserId);
 
         Product saved = productRepository.save(p);
@@ -235,7 +240,7 @@ public class ProductService {
 
     private void checkBarcodeUnique(String barcode, UUID excludeId) {
         if (barcode == null || barcode.isBlank()) return;
-        productRepository.findByBarcode(barcode.trim()).ifPresent(existing -> {
+        productRepository.findFirstByBarcode(barcode.trim()).ifPresent(existing -> {
             if (!existing.getId().equals(excludeId)) {
                 throw new BusinessException("Barcode already assigned to another product: " + barcode);
             }

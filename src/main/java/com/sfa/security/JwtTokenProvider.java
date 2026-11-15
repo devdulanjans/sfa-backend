@@ -51,25 +51,54 @@ public class JwtTokenProvider {
      *                 via the role, not the token.
      */
     public String generateAccessToken(Authentication auth, UUID tenantId) {
+        return generateAccessToken(auth, tenantId, null);
+    }
+
+    /** @param membershipId the membership this session acts as (V119), carried as "mid". */
+    public String generateAccessToken(Authentication auth, UUID tenantId, UUID membershipId) {
+        return generateAccessToken(auth, tenantId, membershipId, null);
+    }
+
+    /** @param app the app this session belongs to (AppScope) — limits which roles it may act as. */
+    public String generateAccessToken(Authentication auth, UUID tenantId, UUID membershipId, String app) {
         UserDetails user = (UserDetails) auth.getPrincipal();
-        return buildToken(user.getUsername(), "ACCESS", accessTokenExpiry, tenantId);
+        return buildToken(user.getUsername(), "ACCESS", accessTokenExpiry, tenantId, membershipId, app);
     }
 
     /** Carries the same "tid" claim as the access token so a later /refresh can
      *  restore whichever channel the user was actively working in — without it,
      *  refreshing would silently reset a manually-switched session back to default. */
     public String generateRefreshToken(String username, UUID tenantId) {
-        String token = buildToken(username, "REFRESH", refreshTokenExpiry, tenantId);
+        return generateRefreshToken(username, tenantId, null);
+    }
+
+    public String generateRefreshToken(String username, UUID tenantId, UUID membershipId) {
+        return generateRefreshToken(username, tenantId, membershipId, null);
+    }
+
+    public String generateRefreshToken(String username, UUID tenantId, UUID membershipId, String app) {
+        String token = buildToken(username, "REFRESH", refreshTokenExpiry, tenantId, membershipId, app);
+        String key = refreshKey(username, membershipId);
         try {
-            redis.opsForValue().set(REFRESH_PREFIX + username, token, refreshTokenExpiry, TimeUnit.MILLISECONDS);
+            redis.opsForValue().set(key, token, refreshTokenExpiry, TimeUnit.MILLISECONDS);
         } catch (Exception e) {
             log.warn("Redis unavailable, storing refresh token in memory: {}", e.getMessage());
-            localRefreshStore.put(REFRESH_PREFIX + username, token);
+            localRefreshStore.put(key, token);
         }
         return token;
     }
 
-    private String buildToken(String subject, String tokenType, long expiry, UUID tenantId) {
+    /**
+     * One refresh token per account PER WORKSPACE (V119): the same person signed into the rep
+     * app and the customer app must not sign each other out. Sessions without a workspace
+     * (platform accounts, legacy) keep the original per-account key.
+     */
+    private static String refreshKey(String username, UUID membershipId) {
+        return membershipId == null ? REFRESH_PREFIX + username : REFRESH_PREFIX + username + ":" + membershipId;
+    }
+
+    private String buildToken(String subject, String tokenType, long expiry, UUID tenantId, UUID membershipId,
+                              String app) {
         Date now = new Date();
         var builder = Jwts.builder()
                 .subject(subject)
@@ -79,6 +108,12 @@ public class JwtTokenProvider {
                 .expiration(new Date(now.getTime() + expiry));
         if (tenantId != null) {
             builder.claim("tid", tenantId.toString());
+        }
+        if (membershipId != null) {
+            builder.claim("mid", membershipId.toString());
+        }
+        if (app != null) {
+            builder.claim("app", app);
         }
         return builder.signWith(key).compact();
     }
@@ -91,6 +126,17 @@ public class JwtTokenProvider {
     public UUID getTenantIdFromToken(String token) {
         String tid = parseClaims(token).get("tid", String.class);
         return tid != null ? UUID.fromString(tid) : null;
+    }
+
+    /** The membership claim ("mid") - null for platform accounts and tokens issued before V119. */
+    public UUID getMembershipIdFromToken(String token) {
+        String mid = parseClaims(token).get("mid", String.class);
+        return mid != null ? UUID.fromString(mid) : null;
+    }
+
+    /** The app claim (AppScope) — null for tokens from older app builds. */
+    public String getAppFromToken(String token) {
+        return AppScope.normalize(parseClaims(token).get("app", String.class));
     }
 
     public boolean validateToken(String token) {
@@ -110,11 +156,13 @@ public class JwtTokenProvider {
             if (!"REFRESH".equals(claims.get("type", String.class))) return false;
             if (isBlacklisted(claims.getId())) return false;
             String username = claims.getSubject();
+            String mid = claims.get("mid", String.class);
+            String key = refreshKey(username, mid != null ? UUID.fromString(mid) : null);
             String stored = null;
             try {
-                stored = redis.opsForValue().get(REFRESH_PREFIX + username);
+                stored = redis.opsForValue().get(key);
             } catch (Exception e) {
-                stored = localRefreshStore.get(REFRESH_PREFIX + username);
+                stored = localRefreshStore.get(key);
             }
             return token.equals(stored);
         } catch (JwtException | IllegalArgumentException e) {
@@ -141,11 +189,17 @@ public class JwtTokenProvider {
     }
 
     public void invalidateRefreshToken(String username) {
+        invalidateRefreshToken(username, null);
+    }
+
+    /** Signs out one workspace session (logout from one app leaves the others signed in). */
+    public void invalidateRefreshToken(String username, UUID membershipId) {
+        String key = refreshKey(username, membershipId);
         try {
-            redis.delete(REFRESH_PREFIX + username);
+            redis.delete(key);
         } catch (Exception e) {
             log.warn("Redis unavailable, removing refresh token from memory: {}", e.getMessage());
-            localRefreshStore.remove(REFRESH_PREFIX + username);
+            localRefreshStore.remove(key);
         }
     }
 

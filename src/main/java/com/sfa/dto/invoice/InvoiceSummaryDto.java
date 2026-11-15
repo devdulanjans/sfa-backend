@@ -20,7 +20,13 @@ public record InvoiceSummaryDto(
         String     status,
         String     orderNumber,
         Instant    orderDate,
-        String     salesRepName
+        String     salesRepName,
+        BigDecimal paidAmount,
+        BigDecimal balance,
+        boolean    overdue,
+        UUID       orderId,
+        /** Order partly invoiced (V120) — this invoice is one of several. */
+        String     orderStatus
 ) {
     public record CustomerRef(UUID id, String name, String phone, String email) {}
 
@@ -46,7 +52,12 @@ public record InvoiceSummaryDto(
                 order != null ? order.getOrderDate() : null,
                 salesRep != null
                         ? (salesRep.getFullName() != null ? salesRep.getFullName() : salesRep.getUsername())
-                        : null
+                        : null,
+                i.getPaidAmount(),
+                i.getBalance(),
+                i.isOverdue(),
+                order != null ? order.getId() : null,
+                order != null && order.getStatus() != null ? order.getStatus().name() : null
         );
     }
 }

@@ -67,9 +67,21 @@ public class UserController {
         return userService.getRecoveryAccounts(key);
     }
 
+    /**
+     * Creates the account — or, when the email already belongs to an account (one person, many
+     * roles), invites that account instead and answers 202 with the invitations.
+     */
     @PostMapping
-    public ResponseEntity<UserDto> create(@Valid @RequestBody CreateUserRequest req,
-                                           @AuthenticationPrincipal UserDetailsImpl principal) {
+    public ResponseEntity<?> create(@Valid @RequestBody CreateUserRequest req,
+                                    @AuthenticationPrincipal UserDetailsImpl principal) {
+        var invited = userService.inviteIfExistingAccount(req, principal.getId());
+        if (invited.isPresent()) {
+            return ResponseEntity.accepted().body(java.util.Map.of(
+                    "invited", true,
+                    "message", req.email().trim() + " already has an account, so they were invited. "
+                            + "They get access once they accept.",
+                    "invitations", invited.get()));
+        }
         UserDto dto = userService.create(req, principal.getId());
         return ResponseEntity.created(URI.create("/api/users/" + dto.id())).body(dto);
     }

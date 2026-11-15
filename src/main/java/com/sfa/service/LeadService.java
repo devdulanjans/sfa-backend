@@ -46,6 +46,7 @@ public class LeadService {
     private final TenantAccessService tenantAccessService;
     private final AuditLogService auditLogService;
     private final SalesRouteAssignmentRepository assignmentRepository;
+    private final MembershipService membershipService;
 
     @PersistenceContext
     private EntityManager em;
@@ -192,6 +193,9 @@ public class LeadService {
                 // Pin the customer to the lead's own channel (matters for an unscoped SUPER_ADMIN).
                 lead.getTenant() != null ? lead.getTenant().getId() : null,
                 lead.getLatitude(), lead.getLongitude(),
+                null,
+                // No explicit shop: links to an unambiguous match (same real phone, similar name),
+                // else registers a new shop — see ShopService.attachShopForNewCustomer.
                 null);
         CustomerDto created = customerService.create(customerReq, actingUserId);
         Customer customer = customerRepository.findById(created.id())
@@ -224,7 +228,8 @@ public class LeadService {
     private void assignToCreatorIfRestricted(Lead lead, Customer customer) {
         if (lead.getCreatedBy() == null) return;
         User rep = userRepository.findById(lead.getCreatedBy().getId()).orElse(null);
-        if (rep == null || !Role.SALES_REP.equals(rep.getRole().getName())) return;
+        UUID leadTenantId = lead.getTenant() != null ? lead.getTenant().getId() : null;
+        if (rep == null || !membershipService.holdsRole(rep, leadTenantId, Role.SALES_REP)) return;
         if (rep.getAssignedCustomers().isEmpty() && rep.getCustomerGroups().isEmpty()) return;
         rep.getAssignedCustomers().add(customer);
         userRepository.save(rep);
@@ -280,7 +285,7 @@ public class LeadService {
         while (true) {
             Number seq = (Number) em.createNativeQuery("SELECT NEXTVAL('customer_code_seq')").getSingleResult();
             String code = "CUST-" + String.format("%05d", seq.longValue());
-            if (customerRepository.findByCustomerCode(code).isEmpty()) return code;
+            if (!customerRepository.existsByCustomerCode(code)) return code;
         }
     }
 

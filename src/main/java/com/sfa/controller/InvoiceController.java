@@ -66,10 +66,11 @@ public class InvoiceController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate issuedTo,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dueFrom,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dueTo,
+            @RequestParam(required = false) String paymentStatus,
             @PageableDefault(size = 20, sort = "issuedDate", direction = Sort.Direction.DESC) Pageable pageable) {
 
-        InvoiceFilter filter = buildFilter(user, invoiceNo, orderNo, customerId, salesRepId,
-                createdFrom, createdTo, issuedFrom, issuedTo, dueFrom, dueTo);
+        InvoiceFilter filter = withPaymentStatus(buildFilter(user, invoiceNo, orderNo, customerId, salesRepId,
+                createdFrom, createdTo, issuedFrom, issuedTo, dueFrom, dueTo), paymentStatus);
 
         return ResponseEntity.ok(invoiceService.listInvoices(filter, pageable));
     }
@@ -88,10 +89,11 @@ public class InvoiceController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate issuedFrom,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate issuedTo,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dueFrom,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dueTo) throws IOException {
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dueTo,
+            @RequestParam(required = false) String paymentStatus) throws IOException {
 
-        InvoiceFilter filter = buildFilter(user, invoiceNo, orderNo, customerId, salesRepId,
-                createdFrom, createdTo, issuedFrom, issuedTo, dueFrom, dueTo);
+        InvoiceFilter filter = withPaymentStatus(buildFilter(user, invoiceNo, orderNo, customerId, salesRepId,
+                createdFrom, createdTo, issuedFrom, issuedTo, dueFrom, dueTo), paymentStatus);
         List<InvoiceSummaryDto> rows = invoiceService.listInvoices(filter, Pageable.unpaged()).getContent();
 
         byte[] bytes;
@@ -123,6 +125,11 @@ public class InvoiceController {
                 .body(bytes);
     }
 
+    private static InvoiceFilter withPaymentStatus(InvoiceFilter f, String paymentStatus) {
+        return new InvoiceFilter(f.invoiceNo(), f.orderNo(), f.customerId(), f.salesRepId(), f.createdFrom(),
+                f.createdTo(), f.issuedFrom(), f.issuedTo(), f.dueFrom(), f.dueTo(), paymentStatus);
+    }
+
     private InvoiceFilter buildFilter(
             UserDetailsImpl user, String invoiceNo, String orderNo, UUID customerId, UUID salesRepId,
             LocalDate createdFrom, LocalDate createdTo, LocalDate issuedFrom, LocalDate issuedTo,
@@ -140,11 +147,28 @@ public class InvoiceController {
     }
 
     @PostMapping("/generate/{orderId}")
-    @Operation(summary = "Generate invoice PDF from an approved order")
+    @Operation(summary = "Invoice an approved order — all of what's left (no body / no lines), or chosen quantities per line")
     public ResponseEntity<Invoice> generate(
             @PathVariable UUID orderId,
+            @RequestBody(required = false) InvoiceService.CreateInvoiceRequest request,
             @AuthenticationPrincipal UserDetailsImpl user) {
-        return ResponseEntity.ok(invoiceService.generateInvoice(orderId, user.getId()));
+        return ResponseEntity.ok(invoiceService.generateInvoice(orderId, request, user.getId()));
+    }
+
+    @GetMapping("/for-order/{orderId}")
+    @Operation(summary = "Every invoice raised for an order (an order can be invoiced in several goes)")
+    public List<InvoiceSummaryDto> forOrder(@PathVariable UUID orderId) {
+        return invoiceService.listForOrder(orderId).stream().map(InvoiceSummaryDto::from).toList();
+    }
+
+    public record ReasonRequest(String reason) {}
+
+    @PostMapping("/{id}/cancel")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','SALES_MANAGER','FINANCE_USER')")
+    @Operation(summary = "Cancel an unpaid invoice — reverses its ledger entry, its quantities can be invoiced again")
+    public InvoiceSummaryDto cancel(@PathVariable UUID id, @RequestBody(required = false) ReasonRequest request,
+                                    @AuthenticationPrincipal UserDetailsImpl user) {
+        return InvoiceSummaryDto.from(invoiceService.cancelInvoice(id, request != null ? request.reason() : null, user.getId()));
     }
 
     @PostMapping("/{id}/share")
@@ -270,13 +294,11 @@ public class InvoiceController {
                 .body(invoiceService.getThermalPreviewBytes(id));
     }
 
-    // These two endpoints move real money through the ledger, so — unlike the rest of this
-    // controller — they carry their own explicit license/role annotations, overriding the
-    // class-level @RequiresLicense(SFA): without this override they'd inherit the SFA
-    // license instead of requiring FINANCE, letting any SFA-only install record ledger
-    // postings it was never sold access to.
+    // Payments (part and balance) are part of invoicing (V120): a channel owner (ADMIN, which
+    // inherits SALES_MANAGER) records them without the Finance module. The ledger is posted
+    // either way, exactly as an issued invoice always is (see InvoiceService) — the FINANCE
+    // license gates the Finance screens, not the ledger's integrity.
     @GetMapping("/{id}/payments")
-    @RequiresLicense(LicensedPackage.FINANCE)
     @PreAuthorize("hasAnyRole('SUPER_ADMIN','SALES_MANAGER','FINANCE_USER')")
     @Operation(summary = "List payments recorded against this invoice")
     public List<InvoicePaymentDto> payments(@PathVariable UUID id) {
@@ -284,12 +306,19 @@ public class InvoiceController {
     }
 
     @PostMapping("/{id}/payments")
-    @RequiresLicense(LicensedPackage.FINANCE)
     @PreAuthorize("hasAnyRole('SUPER_ADMIN','SALES_MANAGER','FINANCE_USER')")
-    @Operation(summary = "Record a payment against this invoice — posts Dr Bank / Cr Accounts Receivable")
+    @Operation(summary = "Record a (part) payment against this invoice — posts Dr Bank or Cash on Hand / Cr Accounts Receivable")
     public InvoicePaymentDto recordPayment(@PathVariable UUID id,
                                             @RequestBody RecordInvoicePaymentRequest request,
                                             @AuthenticationPrincipal UserDetailsImpl user) {
         return invoicePaymentService.recordPayment(id, request, user.getId());
+    }
+
+    @PostMapping("/payments/{paymentId}/void")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','SALES_MANAGER','FINANCE_USER')")
+    @Operation(summary = "Void a payment recorded by mistake — reverses its entry, the amount is owed again")
+    public InvoicePaymentDto voidPayment(@PathVariable UUID paymentId, @RequestBody ReasonRequest request,
+                                         @AuthenticationPrincipal UserDetailsImpl user) {
+        return invoicePaymentService.voidPayment(paymentId, request != null ? request.reason() : null, user.getId());
     }
 }

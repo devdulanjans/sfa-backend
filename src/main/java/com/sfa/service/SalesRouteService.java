@@ -38,6 +38,7 @@ public class SalesRouteService {
     private final AuditLogService auditLogService;
     private final SystemSettingService systemSettingService;
     private final VisitNoteRepository visitNoteRepository;
+    private final MembershipService membershipService;
 
     @PersistenceContext
     private EntityManager em;
@@ -231,10 +232,10 @@ public class SalesRouteService {
         }
         User rep = userRepository.findById(req.salesRepId())
                 .orElseThrow(() -> new ResourceNotFoundException("User", req.salesRepId()));
-        if (!Role.SALES_REP.equals(rep.getRole().getName())) {
-            throw new BusinessException(displayName(rep) + " is not a sales rep.");
-        }
         UUID routeTenantId = route.getTenant().getId();
+        if (!membershipService.holdsRole(rep, routeTenantId, Role.SALES_REP)) {
+            throw new BusinessException(displayName(rep) + " is not a sales rep in this business.");
+        }
         boolean member = tenantRepository.findByUserId(rep.getId()).stream()
                 .anyMatch(t -> t.getId().equals(routeTenantId));
         if (!member) {

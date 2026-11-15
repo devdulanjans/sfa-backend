@@ -13,14 +13,16 @@ public record ProductGroupDto(
         int memberCount,
         List<MemberSummary> members,
         Instant createdAt,
-        Instant updatedAt
+        Instant updatedAt,
+        /** The channel this group belongs to — shown to SUPER_ADMIN, who sees every channel's groups. */
+        String tenantCode
 ) {
     public record MemberSummary(UUID id, String name, String productCode) {}
 
     /** Used for list views — member count only, no per-row member fetch. */
     public static ProductGroupDto summary(ProductGroup g, long memberCount) {
         return new ProductGroupDto(g.getId(), g.getName(), g.getDescription(),
-                (int) memberCount, null, g.getCreatedAt(), g.getUpdatedAt());
+                (int) memberCount, null, g.getCreatedAt(), g.getUpdatedAt(), tenantCode(g));
     }
 
     /** Used for the single-group detail view — includes the full member list. */
@@ -29,6 +31,10 @@ public record ProductGroupDto(
                 .map(p -> new MemberSummary(p.getId(), p.getName(), p.getProductCode()))
                 .toList();
         return new ProductGroupDto(g.getId(), g.getName(), g.getDescription(),
-                members.size(), members, g.getCreatedAt(), g.getUpdatedAt());
+                members.size(), members, g.getCreatedAt(), g.getUpdatedAt(), tenantCode(g));
+    }
+
+    private static String tenantCode(ProductGroup g) {
+        return g.getTenant() != null ? g.getTenant().getCode() : null;
     }
 }

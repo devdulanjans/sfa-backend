@@ -34,6 +34,9 @@ public class TenantFilterInterceptor implements HandlerInterceptor {
     /** Authenticated endpoints a pending (not-yet-selected-a-channel) user must still reach. */
     private static final Set<String> TENANT_SELECTION_EXEMPT = Set.of(
             "/api/auth/switch-tenant",
+            "/api/auth/switch-membership",
+            "/api/me/memberships",
+            "/api/me/invitations",
             "/api/auth/logout",
             "/api/tenants/my"
     );
@@ -79,6 +82,9 @@ public class TenantFilterInterceptor implements HandlerInterceptor {
     }
 
     private boolean isExempt(String requestUri) {
-        return TENANT_SELECTION_EXEMPT.stream().anyMatch(requestUri::endsWith);
+        // Invitation accept/decline live under /api/me/invitations/{id}/... - a person with no
+        // business role yet (or between workspaces) must still be able to answer them.
+        return TENANT_SELECTION_EXEMPT.stream().anyMatch(requestUri::endsWith)
+                || requestUri.contains("/api/me/invitations/");
     }
 }

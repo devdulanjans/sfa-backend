@@ -9,8 +9,9 @@ import java.time.Instant;
 import java.util.UUID;
 
 @Entity
-@Table(name = "user_permissions",
-       uniqueConstraints = @UniqueConstraint(columnNames = {"user_id", "permission_key"}))
+// Unique per (membership, key), or per (account, key) when membership_id is null - partial
+// unique indexes in V119, which JPA annotations cannot express.
+@Table(name = "user_permissions")
 @EntityListeners(AuditingEntityListener.class)
 @Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
 public class UserPermission {
@@ -21,6 +22,10 @@ public class UserPermission {
 
     @Column(name = "user_id", nullable = false)
     private UUID userId;
+
+    /** The membership (role in one channel) this grant belongs to; null = account-level fallback. */
+    @Column(name = "membership_id")
+    private UUID membershipId;
 
     @Column(name = "permission_key", nullable = false, length = 100)
     private String permissionKey;

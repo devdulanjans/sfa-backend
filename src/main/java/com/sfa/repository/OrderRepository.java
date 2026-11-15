@@ -42,7 +42,7 @@ public interface OrderRepository extends JpaRepository<Order, UUID>, JpaSpecific
      *  strictly later state of an already-approved order (see InvoiceService.generateInvoice),
      *  so excluding it would undercount every order that went on to be invoiced. */
     List<Order.OrderStatus> ACHIEVED_STATUSES =
-            List.of(Order.OrderStatus.APPROVED, Order.OrderStatus.INVOICED);
+            List.of(Order.OrderStatus.APPROVED, Order.OrderStatus.PARTIALLY_INVOICED, Order.OrderStatus.INVOICED);
 
     @Query("""
         SELECT COALESCE(SUM(oi.quantity), 0) FROM OrderItem oi
