@@ -31,7 +31,9 @@ public record ProductDto(
         String tenantCode,
         String tenantName,
         /** Every channel this is available in (V112). */
-        java.util.List<java.util.UUID> channelIds
+        java.util.List<java.util.UUID> channelIds,
+        /** When the website picture was last set (V123); null = no picture. */
+        java.time.Instant imageUpdatedAt
 ) {
     public static ProductDto from(Product p) {
         return from(p, null);
@@ -78,7 +80,8 @@ public record ProductDto(
                 p.getTenant() != null ? p.getTenant().getId() : null,
                 p.getTenant() != null ? p.getTenant().getCode() : null,
                 p.getTenant() != null ? p.getTenant().getName() : null,
-                java.util.List.copyOf(p.getChannelIds())
+                java.util.List.copyOf(p.getChannelIds()),
+                p.getImageObjectPath() != null ? p.getImageUpdatedAt() : null
         );
     }
 }

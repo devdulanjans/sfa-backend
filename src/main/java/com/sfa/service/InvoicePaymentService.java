@@ -144,6 +144,43 @@ public class InvoicePaymentService {
         return new CustomerPaymentResult(receipt, amount, allocations, owed.subtract(amount));
     }
 
+    /**
+     * Settles a rep's collection (V122) across the customer's unpaid invoices, oldest due first,
+     * as far as it goes — never refuses: whatever is left over is returned for the caller to hold
+     * as a customer advance. Payments go to Cash on Hand and carry the collection's id.
+     */
+    public List<InvoicePaymentDto> applyCollection(UUID customerId, BigDecimal amount, PaymentMethod method,
+                                                   LocalDate date, String reference, String notes, String receipt,
+                                                   UUID collectionId, List<UUID> invoiceIds, UUID createdBy) {
+        Set<UUID> only = invoiceIds == null || invoiceIds.isEmpty() ? null : new HashSet<>(invoiceIds);
+        Funds funds = funds(null);
+        List<InvoicePaymentDto> allocations = new ArrayList<>();
+        BigDecimal left = amount;
+        // Chosen invoices first, then any other unpaid invoice — the money still pays what is owed.
+        List<Invoice> ordered = new ArrayList<>();
+        List<Invoice> rest = new ArrayList<>();
+        for (Invoice i : invoiceRepo.findPayableForCustomer(customerId, PAYABLE)) {
+            (only == null || only.contains(i.getId()) ? ordered : rest).add(i);
+        }
+        ordered.addAll(rest);
+        for (Invoice candidate : ordered) {
+            if (left.signum() <= 0) break;
+            Invoice invoice = lockedInvoice(candidate.getId());
+            BigDecimal part = invoice.getBalance().min(left);
+            if (part.signum() <= 0) continue;
+            InvoicePayment p = apply(invoice, part, funds, method, date, reference, notes, receipt, createdBy);
+            p.setCollectionId(collectionId);
+            allocations.add(InvoicePaymentDto.from(paymentRepo.save(p)));
+            left = left.subtract(part);
+        }
+        return allocations;
+    }
+
+    /** The receipt number for a new payment or collection. */
+    public String newReceiptNumber() {
+        return nextReceiptNumber();
+    }
+
     /** Voids a payment recorded by mistake: reverses its entry and puts the amount back on the invoice. */
     public InvoicePaymentDto voidPayment(UUID paymentId, String reason, UUID userId) {
         InvoicePayment payment = paymentRepo.findById(paymentId)
@@ -280,7 +317,7 @@ public class InvoicePaymentService {
         return s == null || s.isBlank() ? null : s.trim();
     }
 
-    private PaymentMethod parseMethod(String method) {
+    public PaymentMethod parseMethod(String method) {
         if (method == null || method.isBlank()) return PaymentMethod.CASH;
         try {
             return PaymentMethod.valueOf(method.trim().toUpperCase(java.util.Locale.ROOT));

@@ -87,6 +87,18 @@ public class Product implements MultiChannelScoped {
     @Builder.Default
     private ProductStatus status = ProductStatus.ACTIVE;
 
+    /** Optional picture for the public website (V123); null = none. */
+    @JsonIgnore
+    @Column(name = "image_object_path", length = 300)
+    private String imageObjectPath;
+
+    @JsonIgnore
+    @Column(name = "image_content_type", length = 100)
+    private String imageContentType;
+
+    @Column(name = "image_updated_at")
+    private Instant imageUpdatedAt;
+
     @JsonIgnore
     @ManyToMany(mappedBy = "assignedProducts", fetch = FetchType.LAZY)
     @Builder.Default

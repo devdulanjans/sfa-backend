@@ -29,6 +29,7 @@ import java.util.UUID;
 public class ProductController {
 
     private final ProductService productService;
+    private final com.sfa.service.ProductImageService productImageService;
 
     @GetMapping
     public Page<ProductDto> list(
@@ -71,6 +72,32 @@ public class ProductController {
     public ProductDto update(@PathVariable UUID id, @Valid @RequestBody CreateProductRequest req,
                              @AuthenticationPrincipal UserDetailsImpl principal) {
         return productService.update(id, req, principal.getId());
+    }
+
+    // ── Website picture (V123) ─────────────────────────────────────────────────
+
+    @PostMapping(value = "/{id}/image", consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','SALES_MANAGER')")
+    public ProductDto uploadImage(@PathVariable UUID id,
+                                  @RequestParam("file") org.springframework.web.multipart.MultipartFile file) {
+        return productImageService.upload(id, file);
+    }
+
+    @DeleteMapping("/{id}/image")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','SALES_MANAGER')")
+    public ProductDto removeImage(@PathVariable UUID id) {
+        return productImageService.remove(id);
+    }
+
+    /** The picture for the admin form (any status); the website uses /api/public/products/{id}/image. */
+    @GetMapping("/{id}/image")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','SALES_MANAGER')")
+    public ResponseEntity<byte[]> image(@PathVariable UUID id) {
+        var img = productImageService.forAdmin(id);
+        return ResponseEntity.ok()
+                .contentType(org.springframework.http.MediaType.parseMediaType(img.contentType()))
+                .cacheControl(org.springframework.http.CacheControl.noCache())
+                .body(img.bytes());
     }
 
     @DeleteMapping("/{id}")

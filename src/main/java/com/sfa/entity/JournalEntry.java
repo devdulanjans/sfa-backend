@@ -17,7 +17,9 @@ public class JournalEntry {
 
     public enum SourceType {
         MANUAL, INVOICE_ISSUED, INVOICE_PAYMENT, VENDOR_BILL, VENDOR_BILL_PAYMENT,
-        TAX_PAYMENT, FIXED_ASSET_PURCHASE, DEPRECIATION
+        TAX_PAYMENT, FIXED_ASSET_PURCHASE, DEPRECIATION,
+        /** V122: the part of a rep's collection above what the customer owed. */
+        CUSTOMER_ADVANCE
     }
     public enum JournalStatus { POSTED, VOID }
 

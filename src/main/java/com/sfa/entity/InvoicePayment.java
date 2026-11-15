@@ -29,6 +29,10 @@ public class InvoicePayment {
     @JoinColumn(name = "bank_account_id")
     private BankAccount bankAccount;
 
+    /** The rep collection this payment came from (V122), if any. */
+    @Column(name = "collection_id")
+    private UUID collectionId;
+
     @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal amount;
 

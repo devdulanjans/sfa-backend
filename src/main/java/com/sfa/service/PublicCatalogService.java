@@ -94,7 +94,10 @@ public class PublicCatalogService {
                 p.getId(), p.getName(), p.getProductCode(), p.getDescription(),
                 p.getCategory() != null ? p.getCategory().getName() : null,
                 unit, price.unitPrice(), price.basePrice() != null ? price.basePrice() : price.unitPrice(),
-                business, promotions);
+                business, promotions,
+                p.getImageObjectPath() == null ? null
+                        : "/api/public/products/" + p.getId() + "/image?v="
+                          + (p.getImageUpdatedAt() != null ? p.getImageUpdatedAt().toEpochMilli() : 0));
     }
 
     private PublicCatalogDto.Business toBusiness(Tenant t) {

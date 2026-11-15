@@ -36,7 +36,9 @@ public final class PublicCatalogDto {
             /** Price before that promotion — equal to {@code price} when none applies. */
             BigDecimal basePrice,
             Business business,
-            List<Promotion> promotions
+            List<Promotion> promotions,
+            /** Path of the product's picture on this API (V123), or null when it has none. */
+            String imageUrl
     ) {}
 
     /** {@code slug} is the channel's code — stable, unique, and safe to show in a URL. */

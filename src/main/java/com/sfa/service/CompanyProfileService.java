@@ -21,7 +21,9 @@ import java.util.UUID;
 @Transactional
 public class CompanyProfileService {
 
-    private static final String LOGO_OBJECT_PATH = "company-profile/logo";
+    // One logo per channel profile. (Profiles saved before this used the shared path
+    // "company-profile/logo"; their stored logoObjectPath still points there and keeps working.)
+    private static final String LOGO_OBJECT_PATH = "company-profile/%s/logo";
     private static final long   MAX_LOGO_BYTES    = 2L * 1024 * 1024;
 
     private final CompanyProfileRepository companyProfileRepo;
@@ -85,10 +87,10 @@ public class CompanyProfileService {
             throw new BusinessException("Failed to read uploaded file: " + e.getMessage());
         }
 
-        storage.upload(LOGO_OBJECT_PATH, bytes, contentType);
-
         CompanyProfile p = getSingleton();
-        p.setLogoObjectPath(LOGO_OBJECT_PATH);
+        String path = LOGO_OBJECT_PATH.formatted(p.getId());
+        storage.upload(path, bytes, contentType);
+        p.setLogoObjectPath(path);
         p.setLogoContentType(contentType);
         p.setUpdatedBy(userId);
         return CompanyProfileDto.from(companyProfileRepo.save(p));

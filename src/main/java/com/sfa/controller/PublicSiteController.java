@@ -29,6 +29,7 @@ import java.util.Map;
 public class PublicSiteController {
 
     private final PublicCatalogService catalogService;
+    private final com.sfa.service.ProductImageService productImageService;
     private final ChannelRequestService channelRequestService;
     private final PublicRateLimiter rateLimiter;
     private final com.sfa.service.AccountSignupService accountSignupService;
@@ -59,6 +60,16 @@ public class PublicSiteController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "48") int size) {
         return catalogService.catalog(q, business, page, size);
+    }
+
+    @GetMapping("/products/{id}/image")
+    @Operation(summary = "A listed product's picture (catalogue links carry ?v= so it can be cached)")
+    public org.springframework.http.ResponseEntity<byte[]> productImage(@PathVariable java.util.UUID id) {
+        var img = productImageService.forPublic(id);
+        return org.springframework.http.ResponseEntity.ok()
+                .contentType(org.springframework.http.MediaType.parseMediaType(img.contentType()))
+                .cacheControl(org.springframework.http.CacheControl.maxAge(Duration.ofDays(7)).cachePublic())
+                .body(img.bytes());
     }
 
     @GetMapping("/plans")

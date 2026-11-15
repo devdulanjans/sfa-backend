@@ -10,6 +10,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.net.URI;
 import java.time.Instant;
@@ -46,6 +47,16 @@ public class GlobalExceptionHandler {
                 HttpStatus.BAD_REQUEST, "Validation failed");
         pd.setType(URI.create("/errors/validation"));
         pd.setProperty("violations", errors);
+        pd.setProperty("timestamp", Instant.now());
+        return pd;
+    }
+
+    /** A malformed path/query value (e.g. a bad id in a link) is the caller's mistake, not a server error. */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ProblemDetail handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        ProblemDetail pd = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST,
+                "Invalid value for '" + ex.getName() + "'");
+        pd.setType(URI.create("/errors/bad-request"));
         pd.setProperty("timestamp", Instant.now());
         return pd;
     }
